@@ -45,6 +45,7 @@ public class InvoicerApp
                     new MenuBarItem("_Invoice", new MenuItem[]
                     {
                         new("_Create New", "Ctrl+N", () => Application.Invoke(() => ShowCreateInvoice())),
+                        new("E_xit", "Ctrl+Q", () => Application.RequestStop()),
                     }),
                     new MenuBarItem("_Clients", new MenuItem[]
                     {
