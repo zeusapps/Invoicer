@@ -1,3 +1,4 @@
+using QuestPDF.Drawing;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -7,9 +8,26 @@ namespace Invoicer.Generation;
 
 public static class PdfGenerator
 {
+    private static bool _fontsRegistered;
+
+    private static void EnsureFontsRegistered()
+    {
+        if (_fontsRegistered) return;
+        _fontsRegistered = true;
+
+        var assembly = typeof(PdfGenerator).Assembly;
+        foreach (var name in new[] { "Lato-Regular.ttf", "Lato-Bold.ttf", "Lato-Italic.ttf" })
+        {
+            using var stream = assembly.GetManifestResourceStream($"Invoicer.Resources.Fonts.{name}");
+            if (stream != null)
+                FontManager.RegisterFont(stream);
+        }
+    }
+
     public static void Generate(Invoice invoice)
     {
         QuestPDF.Settings.License = LicenseType.Community;
+        EnsureFontsRegistered();
         Directory.CreateDirectory(invoice.OutputDirectory);
 
         Document.Create(container =>
