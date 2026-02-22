@@ -220,7 +220,7 @@ public class CreateInvoiceView : View
         var outputDir = _config.Output.Pattern
             .Replace("{year}", date.Year.ToString());
         var filename = _config.Output.Filename
-            .Replace("{date}", date.ToString("yyyy-MM-dd"))
+            .Replace("{date}", date.ToString("yyyyMMdd"))
             .Replace("{client}", client.Key);
 
         _previewLabel.Text =

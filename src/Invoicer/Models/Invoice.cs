@@ -98,7 +98,7 @@ public class Invoice
     private static string ResolveFilename(OutputConfig output, ClientConfig client, DateTime date)
     {
         return output.Filename
-            .Replace("{date}", date.ToString("yyyy-MM-dd"))
+            .Replace("{date}", date.ToString("yyyyMMdd"))
             .Replace("{client}", client.Key);
     }
 }
