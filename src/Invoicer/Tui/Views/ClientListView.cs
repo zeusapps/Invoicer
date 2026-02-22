@@ -13,11 +13,13 @@ public class ClientListView : View
     private readonly ListView _listView;
     private readonly TextField[] _fields;
     private int _previousClientIndex = -1;
+    private readonly RadioGroup _monthRuleRadio;
+    private readonly string[] _monthRuleValues = ["early_previous", "early_current"];
     private readonly string[] _fieldLabels =
     [
         "Key:", "Name:", "Name (UA):", "Address:", "Address (UA):",
-        "VAT:", "Currency:", "VAT Rate:", "Service Desc:", "Service (UA):",
-        "Prefix:", "Default Amt:", "Month Rule:",
+        "Currency:", "Default Amt:", "VAT:", "VAT Rate:",
+        "Service Desc:", "Service (UA):", "Prefix:",
     ];
 
     public ClientListView(AppConfig config, Action refresh)
@@ -81,6 +83,17 @@ public class ClientListView : View
             detailFrame.Add(_fields[i]);
         }
 
+        // Month Rule radio group
+        int radioY = _fieldLabels.Length * 2;
+        detailFrame.Add(new Label { Text = "Month Rule:", X = 1, Y = radioY });
+        _monthRuleRadio = new RadioGroup
+        {
+            X = 16,
+            Y = radioY,
+            RadioLabels = ["Early → Previous Month", "Early → Current Month"],
+        };
+        detailFrame.Add(_monthRuleRadio);
+
         // Buttons at bottom
         var addButton = new Button { Text = "Add", X = 1, Y = Pos.AnchorEnd(2) };
         addButton.Accepting += (_, e) => { e.Cancel = true; OnAddClient(); };
@@ -120,14 +133,14 @@ public class ClientListView : View
         client.NameUa = _fields[2].Text?.ToString() ?? "";
         client.Address = _fields[3].Text?.ToString() ?? "";
         client.AddressUa = _fields[4].Text?.ToString() ?? "";
-        client.Vat = _fields[5].Text?.ToString() ?? "";
-        client.Currency = _fields[6].Text?.ToString() ?? "";
-        if (int.TryParse(_fields[7].Text?.ToString(), out var rate)) client.VatRate = rate;
-        client.ServiceDescription = _fields[8].Text?.ToString() ?? "";
-        client.ServiceDescriptionUa = _fields[9].Text?.ToString() ?? "";
-        client.InvoicePrefix = _fields[10].Text?.ToString() ?? "";
-        if (decimal.TryParse(_fields[11].Text?.ToString(), CultureInfo.InvariantCulture, out var amt)) client.DefaultAmount = amt;
-        client.MonthOffsetRule = _fields[12].Text?.ToString() ?? "";
+        client.Currency = _fields[5].Text?.ToString() ?? "";
+        if (decimal.TryParse(_fields[6].Text?.ToString(), CultureInfo.InvariantCulture, out var amt)) client.DefaultAmount = amt;
+        client.Vat = _fields[7].Text?.ToString() ?? "";
+        if (int.TryParse(_fields[8].Text?.ToString(), out var rate)) client.VatRate = rate;
+        client.ServiceDescription = _fields[9].Text?.ToString() ?? "";
+        client.ServiceDescriptionUa = _fields[10].Text?.ToString() ?? "";
+        client.InvoicePrefix = _fields[11].Text?.ToString() ?? "";
+        client.MonthOffsetRule = _monthRuleValues[_monthRuleRadio.SelectedItem];
     }
 
     private void LoadClientIntoFields()
@@ -146,14 +159,15 @@ public class ClientListView : View
         _fields[2].Text = client.NameUa;
         _fields[3].Text = client.Address;
         _fields[4].Text = client.AddressUa;
-        _fields[5].Text = client.Vat;
-        _fields[6].Text = client.Currency;
-        _fields[7].Text = client.VatRate.ToString();
-        _fields[8].Text = client.ServiceDescription;
-        _fields[9].Text = client.ServiceDescriptionUa;
-        _fields[10].Text = client.InvoicePrefix;
-        _fields[11].Text = client.DefaultAmount.ToString("F2", CultureInfo.InvariantCulture);
-        _fields[12].Text = client.MonthOffsetRule;
+        _fields[5].Text = client.Currency;
+        _fields[6].Text = client.DefaultAmount.ToString("F2", CultureInfo.InvariantCulture);
+        _fields[7].Text = client.Vat;
+        _fields[8].Text = client.VatRate.ToString();
+        _fields[9].Text = client.ServiceDescription;
+        _fields[10].Text = client.ServiceDescriptionUa;
+        _fields[11].Text = client.InvoicePrefix;
+        var ruleIndex = Array.IndexOf(_monthRuleValues, client.MonthOffsetRule);
+        _monthRuleRadio.SelectedItem = ruleIndex >= 0 ? ruleIndex : 0;
     }
 
     private void OnAddClient()
