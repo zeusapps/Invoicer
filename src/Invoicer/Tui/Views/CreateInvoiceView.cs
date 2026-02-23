@@ -10,6 +10,7 @@ namespace Invoicer.Tui.Views;
 public class CreateInvoiceView : View
 {
     private readonly AppConfig _config;
+    private readonly List<ClientConfig> _enabledClients;
     private readonly RadioGroup _clientRadio;
     private readonly TextField _invoiceNumberField;
     private readonly TextField _dateField;
@@ -50,9 +51,10 @@ public class CreateInvoiceView : View
             Height = Dim.Fill(),
         };
 
-        // Client selection
+        // Client selection (enabled clients only)
+        _enabledClients = _config.Clients.Where(c => c.Enabled).ToList();
         var clientLabel = new Label { Text = "Client:", X = 1, Y = 1 };
-        var clientLabels = _config.Clients.Select(c => c.Key).ToArray();
+        var clientLabels = _enabledClients.Select(c => c.Key).ToArray();
         _clientRadio = new RadioGroup
         {
             X = 18,
@@ -98,8 +100,8 @@ public class CreateInvoiceView : View
             Width = 20,
             ReadOnly = false,
         };
-        if (_config.Clients.Count > 0)
-            _amountField.Text = _config.Clients[0].DefaultAmount.ToString("F2", CultureInfo.InvariantCulture);
+        if (_enabledClients.Count > 0)
+            _amountField.Text = _enabledClients[0].DefaultAmount.ToString("F2", CultureInfo.InvariantCulture);
         row += 2;
 
         // Service month (read-only)
@@ -187,9 +189,9 @@ public class CreateInvoiceView : View
 
     private void OnClientChanged()
     {
-        if (SelectedClientIndex >= 0 && SelectedClientIndex < _config.Clients.Count)
+        if (SelectedClientIndex >= 0 && SelectedClientIndex < _enabledClients.Count)
         {
-            var client = _config.Clients[SelectedClientIndex];
+            var client = _enabledClients[SelectedClientIndex];
             _invoiceNumberField.Text = (client.LastInvoiceNumber + 1).ToString();
             _amountField.Text = client.DefaultAmount.ToString("F2", CultureInfo.InvariantCulture);
         }
@@ -200,13 +202,15 @@ public class CreateInvoiceView : View
 
     private void UpdatePreview()
     {
-        if (SelectedClientIndex < 0 || SelectedClientIndex >= _config.Clients.Count)
+        if (SelectedClientIndex < 0 || SelectedClientIndex >= _enabledClients.Count)
         {
-            _previewLabel.Text = "Select a client to see preview.";
+            _previewLabel.Text = _enabledClients.Count == 0
+                ? "No enabled clients available."
+                : "Select a client to see preview.";
             return;
         }
 
-        var client = _config.Clients[SelectedClientIndex];
+        var client = _enabledClients[SelectedClientIndex];
         if (!int.TryParse(_invoiceNumberField.Text?.ToString(), out var invNum)) invNum = 1;
         if (!decimal.TryParse(_amountField.Text?.ToString(), CultureInfo.InvariantCulture, out var amount))
             amount = client.DefaultAmount;
@@ -239,10 +243,10 @@ public class CreateInvoiceView : View
 
     private string CalculateServiceMonthText()
     {
-        if (SelectedClientIndex < 0 || SelectedClientIndex >= _config.Clients.Count)
+        if (SelectedClientIndex < 0 || SelectedClientIndex >= _enabledClients.Count)
             return "N/A";
 
-        var client = _config.Clients[SelectedClientIndex];
+        var client = _enabledClients[SelectedClientIndex];
         var date = ParseDate();
         var serviceMonth = Invoice.CalculateServiceMonth(date, client.MonthOffsetRule);
         return serviceMonth.ToString("MMMM yyyy");
@@ -250,13 +254,13 @@ public class CreateInvoiceView : View
 
     private int GetNextInvoiceNumber()
     {
-        if (_config.Clients.Count == 0) return 1;
-        return _config.Clients[0].LastInvoiceNumber + 1;
+        if (_enabledClients.Count == 0) return 1;
+        return _enabledClients[0].LastInvoiceNumber + 1;
     }
 
     private void OnGenerate()
     {
-        if (SelectedClientIndex < 0 || SelectedClientIndex >= _config.Clients.Count)
+        if (SelectedClientIndex < 0 || SelectedClientIndex >= _enabledClients.Count)
         {
             MessageBox.ErrorQuery("Error", "Please select a client.", "OK");
             return;
@@ -283,7 +287,7 @@ public class CreateInvoiceView : View
             return;
         }
 
-        var client = _config.Clients[SelectedClientIndex];
+        var client = _enabledClients[SelectedClientIndex];
         var invoice = Invoice.Create(
             client,
             _config.Supplier,

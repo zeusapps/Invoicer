@@ -16,4 +16,5 @@ public class ClientConfig
     public decimal DefaultAmount { get; set; }
     public string MonthOffsetRule { get; set; } = "early_previous";
     public int LastInvoiceNumber { get; set; }
+    public bool Enabled { get; set; } = true;
 }

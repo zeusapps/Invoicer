@@ -14,6 +14,7 @@ public class ClientListView : View
     private readonly TextField[] _fields;
     private int _previousClientIndex = -1;
     private readonly RadioGroup _monthRuleRadio;
+    private readonly Button _toggleEnabledButton;
     private readonly string[] _monthRuleValues = ["early_previous", "early_current"];
     private readonly string[] _fieldLabels =
     [
@@ -51,8 +52,8 @@ public class ClientListView : View
             Width = Dim.Fill(),
             Height = Dim.Fill(),
         };
-        _listView.SetSource(new ObservableCollection<string>(_config.Clients.Select(c => c.Key)));
-        _listView.SelectedItemChanged += (_, _) => LoadClientIntoFields();
+        RefreshListViewSource();
+        _listView.SelectedItemChanged += (_, _) => OnSelectedClientChanged();
         listFrame.Add(_listView);
 
         // Detail editor on the right
@@ -104,12 +105,22 @@ public class ClientListView : View
         var saveButton = new Button { Text = "Save All", X = 22, Y = Pos.AnchorEnd(2) };
         saveButton.Accepting += (_, e) => { e.Cancel = true; OnSave(); };
 
-        Add(listFrame, detailFrame, addButton, deleteButton, saveButton);
+        var moveUpButton = new Button { Text = "▲ Up", X = 36, Y = Pos.AnchorEnd(2) };
+        moveUpButton.Accepting += (_, e) => { e.Cancel = true; OnMoveClient(-1); };
+
+        var moveDownButton = new Button { Text = "▼ Down", X = 46, Y = Pos.AnchorEnd(2) };
+        moveDownButton.Accepting += (_, e) => { e.Cancel = true; OnMoveClient(1); };
+
+        _toggleEnabledButton = new Button { Text = "Disable", X = 58, Y = Pos.AnchorEnd(2) };
+        _toggleEnabledButton.Accepting += (_, e) => { e.Cancel = true; OnToggleEnabled(); };
+
+        Add(listFrame, detailFrame, addButton, deleteButton, saveButton, moveUpButton, moveDownButton, _toggleEnabledButton);
 
         if (_config.Clients.Count > 0)
         {
             _listView.SelectedItem = 0;
             LoadClientIntoFields();
+            UpdateToggleButtonLabel();
         }
     }
 
@@ -170,6 +181,56 @@ public class ClientListView : View
         _monthRuleRadio.SelectedItem = ruleIndex >= 0 ? ruleIndex : 0;
     }
 
+    private void RefreshListViewSource()
+    {
+        _listView.SetSource(new ObservableCollection<string>(
+            _config.Clients.Select(c => c.Enabled ? c.Key : ApplyStrikethrough(c.Key))));
+    }
+
+    private static string ApplyStrikethrough(string text)
+    {
+        return string.Concat(text.SelectMany(c => new[] { c, '\u0336' }));
+    }
+
+    private void OnSelectedClientChanged()
+    {
+        LoadClientIntoFields();
+        UpdateToggleButtonLabel();
+    }
+
+    private void UpdateToggleButtonLabel()
+    {
+        var idx = _listView.SelectedItem;
+        if (idx >= 0 && idx < _config.Clients.Count)
+            _toggleEnabledButton.Text = _config.Clients[idx].Enabled ? "Disable" : "Enable";
+    }
+
+    private void OnMoveClient(int direction)
+    {
+        SaveFieldsToClient();
+        var idx = _listView.SelectedItem;
+        var newIdx = idx + direction;
+        if (idx < 0 || idx >= _config.Clients.Count) return;
+        if (newIdx < 0 || newIdx >= _config.Clients.Count) return;
+
+        (_config.Clients[idx], _config.Clients[newIdx]) = (_config.Clients[newIdx], _config.Clients[idx]);
+        _previousClientIndex = -1;
+        RefreshListViewSource();
+        _listView.SelectedItem = newIdx;
+        LoadClientIntoFields();
+    }
+
+    private void OnToggleEnabled()
+    {
+        var idx = _listView.SelectedItem;
+        if (idx < 0 || idx >= _config.Clients.Count) return;
+
+        _config.Clients[idx].Enabled = !_config.Clients[idx].Enabled;
+        RefreshListViewSource();
+        _listView.SelectedItem = idx;
+        UpdateToggleButtonLabel();
+    }
+
     private void OnAddClient()
     {
         SaveFieldsToClient();
@@ -181,7 +242,7 @@ public class ClientListView : View
             MonthOffsetRule = "early_previous",
         };
         _config.Clients.Add(newClient);
-        _listView.SetSource(new ObservableCollection<string>(_config.Clients.Select(c => c.Key)));
+        RefreshListViewSource();
         _listView.SelectedItem = _config.Clients.Count - 1;
         LoadClientIntoFields();
     }
@@ -197,7 +258,7 @@ public class ClientListView : View
         if (result == 0)
         {
             _config.Clients.RemoveAt(idx);
-            _listView.SetSource(new ObservableCollection<string>(_config.Clients.Select(c => c.Key)));
+            RefreshListViewSource();
             if (_config.Clients.Count > 0)
             {
                 _listView.SelectedItem = Math.Min(idx, _config.Clients.Count - 1);
@@ -215,7 +276,7 @@ public class ClientListView : View
         SaveFieldsToClient();
 
         // Update list view keys in case they changed
-        _listView.SetSource(new ObservableCollection<string>(_config.Clients.Select(c => c.Key)));
+        RefreshListViewSource();
 
         try
         {

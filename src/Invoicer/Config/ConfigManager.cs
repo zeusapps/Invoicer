@@ -89,6 +89,7 @@ public static class ConfigManager
                     DefaultAmount = GetDecimal(clientTable, "default_amount"),
                     MonthOffsetRule = GetString(clientTable, "month_offset_rule", "early_previous"),
                     LastInvoiceNumber = GetInt(clientTable, "last_invoice_number"),
+                    Enabled = GetBool(clientTable, "enabled", true),
                 });
             }
         }
@@ -136,6 +137,7 @@ public static class ConfigManager
             sb.AppendLine($"default_amount = {client.DefaultAmount.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
             WriteString(sb, "month_offset_rule", client.MonthOffsetRule);
             sb.AppendLine($"last_invoice_number = {client.LastInvoiceNumber}");
+            sb.AppendLine($"enabled = {(client.Enabled ? "true" : "false")}");
         }
 
         return sb.ToString();
@@ -168,6 +170,16 @@ public static class ConfigManager
             if (val is long l) return (int)l;
             if (val is int i) return i;
             if (int.TryParse(val?.ToString(), out var parsed)) return parsed;
+        }
+        return defaultValue;
+    }
+
+    private static bool GetBool(TomlTable table, string key, bool defaultValue = false)
+    {
+        if (table.TryGetValue(key, out var val))
+        {
+            if (val is bool b) return b;
+            if (bool.TryParse(val?.ToString(), out var parsed)) return parsed;
         }
         return defaultValue;
     }
