@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using Terminal.Gui;
 using Invoicer.Models;
 using Invoicer.Config;
@@ -164,6 +165,7 @@ public class CreateInvoiceView : View
             Width = Dim.Fill(1),
             Height = Dim.Fill(1),
             Text = "",
+            HotKeySpecifier = (Rune)0xFFFF,
         };
         previewFrame.Add(_previewLabel);
 
