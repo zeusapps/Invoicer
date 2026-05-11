@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     branches: [main]
-    tags: ["v*.*.*"]
+    tags: ['v*.*.*']
 
 jobs:
   build:
@@ -14,7 +14,10 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "9.0.x"
+          dotnet-version: '9.0.x'
+
+      - name: Run tests
+        run: dotnet test tests/Invoicer.Tests/Invoicer.Tests.csproj -c Release
 
       - name: Build
         run: dotnet build src/Invoicer/Invoicer.csproj -c Release
@@ -31,7 +34,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "9.0.x"
+          dotnet-version: '9.0.x'
 
       - name: Publish
         run: dotnet publish src/Invoicer/Invoicer.csproj -c Release -o publish-output

@@ -21,11 +21,13 @@ public class Invoice
 
     public bool GenerateDocx { get; set; } = true;
     public bool GeneratePdf { get; set; } = true;
+    public bool GenerateXml { get; set; }
 
     public string OutputDirectory { get; set; } = "";
     public string BaseFilename { get; set; } = "";
     public string DocxPath => Path.Combine(OutputDirectory, BaseFilename + ".docx");
     public string PdfPath => Path.Combine(OutputDirectory, BaseFilename + ".pdf");
+    public string XmlPath => Path.Combine(OutputDirectory, BaseFilename + ".xml");
 
     public static Invoice Create(
         ClientConfig client,
@@ -35,7 +37,8 @@ public class Invoice
         DateTime invoiceDate,
         decimal amount,
         bool generateDocx = true,
-        bool generatePdf = true)
+        bool generatePdf = true,
+        bool generateXml = false)
     {
         var serviceMonth = CalculateServiceMonth(invoiceDate, client.MonthOffsetRule);
         var netAmount = amount;
@@ -64,6 +67,7 @@ public class Invoice
             ServiceDescriptionUa = client.ServiceDescriptionUa,
             GenerateDocx = generateDocx,
             GeneratePdf = generatePdf,
+            GenerateXml = generateXml,
             OutputDirectory = outputDir,
             BaseFilename = filename,
         };

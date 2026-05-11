@@ -1,7 +1,7 @@
-using Terminal.Gui;
-using Invoicer.Models;
 using Invoicer.Config;
+using Invoicer.Models;
 using Invoicer.Tui.Views;
+using Terminal.Gui;
 
 namespace Invoicer.Tui;
 
@@ -115,7 +115,7 @@ public class InvoicerApp
     private void ShowAbout()
     {
         MessageBox.Query("About Invoicer",
-            "Invoicer v1.0\n\nBilingual invoice generator\n(English / Ukrainian)\n\nGenerates DOCX and PDF invoices.",
+            "Invoicer v1.0\n\nBilingual invoice generator\n(English / Ukrainian)\n\nGenerates DOCX, PDF, and KSeF XML invoices.",
             "OK");
     }
 }

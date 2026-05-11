@@ -1,6 +1,6 @@
+using Invoicer.Models;
 using Tomlyn;
 using Tomlyn.Model;
-using Invoicer.Models;
 
 namespace Invoicer.Config;
 
@@ -66,6 +66,9 @@ public static class ConfigManager
                 Directory = GetString(outputTable, "directory"),
                 Pattern = GetString(outputTable, "pattern"),
                 Filename = GetString(outputTable, "filename"),
+                GenerateDocxByDefault = GetBool(outputTable, "generate_docx_by_default", true),
+                GeneratePdfByDefault = GetBool(outputTable, "generate_pdf_by_default", true),
+                GenerateXmlByDefault = GetBool(outputTable, "generate_xml_by_default", false),
             };
         }
 
@@ -118,6 +121,9 @@ public static class ConfigManager
         WriteString(sb, "directory", config.Output.Directory);
         WriteString(sb, "pattern", config.Output.Pattern);
         WriteString(sb, "filename", config.Output.Filename);
+        sb.AppendLine($"generate_docx_by_default = {(config.Output.GenerateDocxByDefault ? "true" : "false")}");
+        sb.AppendLine($"generate_pdf_by_default = {(config.Output.GeneratePdfByDefault ? "true" : "false")}");
+        sb.AppendLine($"generate_xml_by_default = {(config.Output.GenerateXmlByDefault ? "true" : "false")}");
 
         foreach (var client in config.Clients)
         {

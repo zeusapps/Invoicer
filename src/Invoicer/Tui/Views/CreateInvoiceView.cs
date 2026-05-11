@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.Text;
-using Terminal.Gui;
-using Invoicer.Models;
 using Invoicer.Config;
 using Invoicer.Generation;
+using Invoicer.Models;
 using Invoicer.Tui.Dialogs;
+using Terminal.Gui;
 
 namespace Invoicer.Tui.Views;
 
@@ -19,6 +19,7 @@ public class CreateInvoiceView : View
     private readonly Label _serviceMonthLabel;
     private readonly CheckBox _docxCheckBox;
     private readonly CheckBox _pdfCheckBox;
+    private readonly CheckBox _xmlCheckBox;
     private readonly Label _previewLabel;
 
     private int SelectedClientIndex => _clientRadio.SelectedItem;
@@ -123,14 +124,21 @@ public class CreateInvoiceView : View
             Text = "DOCX",
             X = 18,
             Y = row,
-            CheckedState = CheckState.Checked,
+            CheckedState = _config.Output.GenerateDocxByDefault ? CheckState.Checked : CheckState.UnChecked,
         };
         _pdfCheckBox = new CheckBox
         {
             Text = "PDF",
             X = 30,
             Y = row,
-            CheckedState = CheckState.Checked,
+            CheckedState = _config.Output.GeneratePdfByDefault ? CheckState.Checked : CheckState.UnChecked,
+        };
+        _xmlCheckBox = new CheckBox
+        {
+            Text = "KSeF XML",
+            X = 40,
+            Y = row,
+            CheckedState = _config.Output.GenerateXmlByDefault ? CheckState.Checked : CheckState.UnChecked,
         };
         row += 3;
 
@@ -153,7 +161,7 @@ public class CreateInvoiceView : View
             dateLabel, _dateField,
             amountLabel, _amountField,
             serviceMonthTitle, _serviceMonthLabel,
-            formatLabel, _docxCheckBox, _pdfCheckBox,
+            formatLabel, _docxCheckBox, _pdfCheckBox, _xmlCheckBox,
             generateButton
         );
 
@@ -282,12 +290,17 @@ public class CreateInvoiceView : View
 
         var generateDocx = _docxCheckBox.CheckedState == CheckState.Checked;
         var generatePdf = _pdfCheckBox.CheckedState == CheckState.Checked;
+        var generateXml = _xmlCheckBox.CheckedState == CheckState.Checked;
 
-        if (!generateDocx && !generatePdf)
+        if (!generateDocx && !generatePdf && !generateXml)
         {
-            MessageBox.ErrorQuery("Error", "Please select at least one output format.", "OK");
+            MessageBox.ErrorQuery("Error", "Please select at least one output format (DOCX, PDF, or KSeF XML).", "OK");
             return;
         }
+
+        _config.Output.GenerateDocxByDefault = generateDocx;
+        _config.Output.GeneratePdfByDefault = generatePdf;
+        _config.Output.GenerateXmlByDefault = generateXml;
 
         var client = _enabledClients[SelectedClientIndex];
         var invoice = Invoice.Create(
@@ -298,7 +311,8 @@ public class CreateInvoiceView : View
             ParseDate(),
             amount,
             generateDocx,
-            generatePdf
+            generatePdf,
+            generateXml
         );
 
         try
@@ -317,6 +331,12 @@ public class CreateInvoiceView : View
                 generatedFiles.Add(invoice.PdfPath);
             }
 
+            if (invoice.GenerateXml)
+            {
+                KsefXmlGenerator.Generate(invoice);
+                generatedFiles.Add(invoice.XmlPath);
+            }
+
             // Update last invoice number
             client.LastInvoiceNumber = invoiceNumber;
             ConfigManager.Save(_config);
@@ -326,6 +346,11 @@ public class CreateInvoiceView : View
             // Update fields for next invoice
             _invoiceNumberField.Text = (invoiceNumber + 1).ToString();
             UpdatePreview();
+        }
+        catch (KsefValidationException ex)
+        {
+            var details = string.Join("\n", ex.Errors.Select(error => $"- {error}"));
+            MessageBox.ErrorQuery("KSeF Validation Failed", details, "OK");
         }
         catch (Exception ex)
         {
