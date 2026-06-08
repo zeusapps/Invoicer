@@ -123,6 +123,13 @@ public static class KsefXmlGenerator
         writer.WriteElementString("AdresL1", party.AddressLine1);
         writer.WriteEndElement();
 
+        // Buyer block in KSeF examples includes mandatory indicators JST/GV.
+        if (elementName == "Podmiot2")
+        {
+            writer.WriteElementString("JST", "2");
+            writer.WriteElementString("GV", "2");
+        }
+
         writer.WriteEndElement();
     }
 

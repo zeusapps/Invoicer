@@ -109,6 +109,14 @@ public class KsefXmlGeneratorTests
         Assert.Equal(
             fixture.Root?.Element(ns + "Podmiot2")?.Element(ns + "DaneIdentyfikacyjne")?.Element(ns + "NrID")?.Value,
             generated.Root?.Element(ns + "Podmiot2")?.Element(ns + "DaneIdentyfikacyjne")?.Element(ns + "NrID")?.Value);
+
+        Assert.Equal(
+            fixture.Root?.Element(ns + "Podmiot2")?.Element(ns + "JST")?.Value,
+            generated.Root?.Element(ns + "Podmiot2")?.Element(ns + "JST")?.Value);
+
+        Assert.Equal(
+            fixture.Root?.Element(ns + "Podmiot2")?.Element(ns + "GV")?.Value,
+            generated.Root?.Element(ns + "Podmiot2")?.Element(ns + "GV")?.Value);
     }
 
     private static Invoice CreateInvoice(string formattedNumber, DateTime invoiceDate, decimal netAmount, int vatRate)
