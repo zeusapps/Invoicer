@@ -210,9 +210,11 @@ public static class ConfigManager
             {
                 Name = "John Doe",
                 NameUa = "Джон Доу",
-                Tin = "0000000000",
+                // Placeholders must satisfy the FA(3) type TNrNIP ([1-9]((\d[1-9])|([1-9]\d))\d{7}),
+                // otherwise the default config cannot produce a valid KSeF invoice.
+                Tin = "1111111111",
                 Regon = "000000000",
-                Vat = "PL0000000000",
+                Vat = "PL1111111111",
                 Address = "ul. Example 1/1, 00-000 Warsaw, Poland",
                 AddressUa = "вул. Приклад 1/1, 00-000 Варшава, Польща",
                 Iban = "PL00000000000000000000000000",
@@ -229,7 +231,7 @@ public static class ConfigManager
                     NameUa = "ТОВ «Зразок»",
                     Address = "1 Main St., 00-000 Warsaw, Poland",
                     AddressUa = "вул. Головна 1, 00-000 Варшава, Польща",
-                    Vat = "PL0000000000",
+                    Vat = "PL9999999999",
                     Currency = "PLN",
                     VatRate = 23,
                     ServiceDescription = "Services according to agreement",

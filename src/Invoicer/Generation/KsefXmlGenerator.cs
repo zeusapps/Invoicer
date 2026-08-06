@@ -17,7 +17,7 @@ public static class KsefXmlGenerator
         public const string SystemInfo = "Aplikacja Podatnika KSeF";
     }
 
-    public static void Generate(Invoice invoice)
+    public static void Generate(Invoice invoice, TimeProvider? timeProvider = null)
     {
         var errors = Validate(invoice);
         if (errors.Count > 0)
@@ -25,7 +25,7 @@ public static class KsefXmlGenerator
             throw new KsefValidationException(errors);
         }
 
-        var document = KsefInvoiceDocument.FromInvoice(invoice);
+        var document = KsefInvoiceDocument.FromInvoice(invoice, timeProvider ?? TimeProvider.System);
 
         Directory.CreateDirectory(invoice.OutputDirectory);
 
@@ -105,9 +105,11 @@ public static class KsefXmlGenerator
     {
         writer.WriteStartElement(elementName);
 
+        // TPodmiot1 is a closed sequence of NIP + Nazwa, so only the buyer may carry a
+        // country code alongside its identifier. The seller's country lives in Adres.
         writer.WriteStartElement("DaneIdentyfikacyjne");
-        if (!string.IsNullOrWhiteSpace(party.CountryCode))
-            writer.WriteElementString("KodKraju", party.CountryCode);
+        if (!string.IsNullOrWhiteSpace(party.IdentifierCountryCode))
+            writer.WriteElementString("KodKraju", party.IdentifierCountryCode);
 
         if (!string.IsNullOrWhiteSpace(party.Nip))
             writer.WriteElementString("NIP", party.Nip);
@@ -188,7 +190,7 @@ public static class KsefXmlGenerator
 
     internal sealed record KsefInvoiceDocument(KsefHeader Header, KsefParty Seller, KsefParty Buyer, KsefInvoiceBody Body)
     {
-        public static KsefInvoiceDocument FromInvoice(Invoice invoice)
+        public static KsefInvoiceDocument FromInvoice(Invoice invoice, TimeProvider timeProvider)
         {
             var buyerCountryCode = ExtractCountryCode(invoice.Client.Vat);
             var buyerIdentifier = invoice.Client.Vat;
@@ -199,17 +201,19 @@ public static class KsefXmlGenerator
                     Metadata.FormCodeSystem,
                     Metadata.SchemaVersion,
                     Metadata.FormVariant,
-                    DateTime.SpecifyKind(invoice.InvoiceDate.Date, DateTimeKind.Utc),
+                    // Time the document was produced, not the invoice date: FA(3) bounds this
+                    // field to 2025-09-01Z..2050-01-01Z, which an invoice date can fall outside.
+                    timeProvider.GetUtcNow().UtcDateTime,
                     Metadata.SystemInfo),
                 new KsefParty(
-                    CountryCode: "PL",
+                    IdentifierCountryCode: null,
                     Nip: invoice.Supplier.Tin,
                     Identifier: null,
                     Name: invoice.Supplier.Name,
                     AddressCountryCode: "PL",
                     AddressLine1: NormalizeWhitespace(invoice.Supplier.Address)),
                 new KsefParty(
-                    CountryCode: buyerCountryCode,
+                    IdentifierCountryCode: buyerCountryCode,
                     Nip: null,
                     Identifier: buyerIdentifier,
                     Name: invoice.Client.Name,
@@ -257,7 +261,7 @@ public static class KsefXmlGenerator
         string SystemInfo);
 
     internal sealed record KsefParty(
-        string? CountryCode,
+        string? IdentifierCountryCode,
         string? Nip,
         string? Identifier,
         string Name,
