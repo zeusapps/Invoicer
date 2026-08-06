@@ -1,19 +1,4 @@
-## Purpose
-
-Define how GitHub Actions builds the project on every push to main and, on a version tag, publishes a version-stamped single-file executable as a GitHub Release.
-
-## Requirements
-
-### Requirement: Build on push to main
-The workflow SHALL build the project using `dotnet build` on every push to the main branch. The build MUST fail the workflow if compilation errors occur.
-
-#### Scenario: Successful build on push
-- **WHEN** a commit is pushed to the main branch
-- **THEN** GitHub Actions runs `dotnet build` and the workflow succeeds
-
-#### Scenario: Build failure on push
-- **WHEN** a commit with compilation errors is pushed to main
-- **THEN** the workflow fails and reports the build error
+## MODIFIED Requirements
 
 ### Requirement: Publish and release on version tag
 The workflow SHALL publish a self-contained win-x64 single-file executable when a version tag matching `v*.*.*` is pushed. The publish step MUST stamp the executable's version from the tag by passing `-p:Version=<tag without the leading v>` to `dotnet publish`, so the built binary can identify its own version at runtime. The executable MUST be zipped and attached to a GitHub Release named after the tag.
@@ -30,6 +15,8 @@ The workflow SHALL publish a self-contained win-x64 single-file executable when 
 - **WHEN** a tag not matching `v*.*.*` is pushed
 - **THEN** no release is created
 
+## ADDED Requirements
+
 ### Requirement: Non-release builds carry a sentinel version
 Builds not produced from a version tag SHALL report version `0.0.0`, so that a development or branch build is never mistaken for a release and never compares as newer than a published one.
 
@@ -40,10 +27,3 @@ Builds not produced from a version tag SHALL report version `0.0.0`, so that a d
 #### Scenario: Push-to-main build
 - **WHEN** the build job runs for a push to `main` without a version tag
 - **THEN** no version is stamped and the binary reports `0.0.0`
-
-### Requirement: Release artifact is a zip archive
-The release artifact SHALL be a zip file containing the published single-file executable. The zip MUST be named `Invoicer-<tag>.zip` (e.g., `Invoicer-v1.0.0.zip`).
-
-#### Scenario: Zip contents
-- **WHEN** a release is created
-- **THEN** the attached zip contains the `Invoicer.exe` single-file executable

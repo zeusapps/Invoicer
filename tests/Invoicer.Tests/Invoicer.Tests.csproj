@@ -24,6 +24,9 @@
         <None Include="TestData\*.xml">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </None>
+        <None Include="TestData\*.json">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
         <None Include="TestData\Schema\*.xsd">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </None>

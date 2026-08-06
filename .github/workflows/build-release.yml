@@ -36,8 +36,19 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
+      - name: Derive version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+)$') {
+            Write-Error "Tag '$tag' is not of the form vMAJOR.MINOR.PATCH"
+            exit 1
+          }
+          "version=$($Matches[1])" >> $env:GITHUB_OUTPUT
+
       - name: Publish
-        run: dotnet publish src/Invoicer/Invoicer.csproj -c Release -o publish-output
+        run: dotnet publish src/Invoicer/Invoicer.csproj -c Release -o publish-output -p:Version=${{ steps.version.outputs.version }}
 
       - name: Zip artifact
         run: Compress-Archive -Path publish-output/Invoicer.exe -DestinationPath Invoicer-${{ github.ref_name }}.zip

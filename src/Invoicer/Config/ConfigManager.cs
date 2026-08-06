@@ -72,6 +72,17 @@ public static class ConfigManager
             };
         }
 
+        if (table.TryGetValue("update", out var updateObj) && updateObj is TomlTable updateTable)
+        {
+            var repository = GetString(updateTable, "repository", "zeusapps/Invoicer");
+            config.Update = new UpdateConfig
+            {
+                CheckOnStartup = GetBool(updateTable, "check_on_startup", true),
+                Repository = string.IsNullOrWhiteSpace(repository) ? "zeusapps/Invoicer" : repository,
+                DismissedVersion = GetString(updateTable, "dismissed_version"),
+            };
+        }
+
         if (table.TryGetValue("clients", out var clientsObj) && clientsObj is TomlTableArray clientsArray)
         {
             foreach (var clientTable in clientsArray)
@@ -124,6 +135,12 @@ public static class ConfigManager
         sb.AppendLine($"generate_docx_by_default = {(config.Output.GenerateDocxByDefault ? "true" : "false")}");
         sb.AppendLine($"generate_pdf_by_default = {(config.Output.GeneratePdfByDefault ? "true" : "false")}");
         sb.AppendLine($"generate_xml_by_default = {(config.Output.GenerateXmlByDefault ? "true" : "false")}");
+
+        sb.AppendLine();
+        sb.AppendLine("[update]");
+        sb.AppendLine($"check_on_startup = {(config.Update.CheckOnStartup ? "true" : "false")}");
+        WriteString(sb, "repository", config.Update.Repository);
+        WriteString(sb, "dismissed_version", config.Update.DismissedVersion);
 
         foreach (var client in config.Clients)
         {

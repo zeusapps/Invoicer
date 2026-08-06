@@ -12,6 +12,7 @@ A terminal-based bilingual (English/Ukrainian) invoice generator for freelancers
 - **Multiple clients** — configure and manage multiple clients with different currencies, VAT rates, and service descriptions
 - **Smart defaults** — auto-increments invoice numbers, calculates service month based on configurable rules, pre-fills amounts
 - **TOML config** — human-readable configuration file, editable both in-app and by hand
+- **Self-updating** — checks GitHub for new releases and installs them in place, on your confirmation
 
 ## Screenshots
 
@@ -56,6 +57,7 @@ On first launch, a default `config.toml` is created next to the executable. Edit
 - **Invoice > Create New** — main invoice creation form
 - **Clients > List/Edit Clients** — manage client configurations
 - **Settings** — edit supplier info and output paths
+- **Help > Check for Updates** — look for a new release right now
 
 ### Creating an Invoice
 
@@ -72,9 +74,15 @@ Files are saved to the configured output directory following the pattern:
 Example: ./output/2026/Invoices/20260222_ACME_PL.docx
 ```
 
+## Updates
+
+Invoicer checks GitHub for a newer release when it starts. The check runs in the background and stays silent unless there is something newer — if you are offline or GitHub is unreachable, nothing is reported and startup is unaffected. You can also check on demand from **Help > Check for Updates**, which always tells you the outcome.
+
+When an update is found you are shown the version, download size, and release notes, and you choose whether to install it. Nothing is downloaded until you confirm. Installing replaces the executable in place and restarts it; your `config.toml` and generated invoices are untouched. The previous executable is kept beside the new one as `Invoicer.exe.old` until the next launch, so you can rename it back if you need to.
+
 ## Configuration
 
-The `config.toml` file has three sections:
+The `config.toml` file has four sections:
 
 ### Supplier
 
@@ -90,6 +98,14 @@ Your business details — name, tax IDs, address, bank account (in both English 
 | `generate_docx_by_default` | Default DOCX checkbox state in Create Invoice     | —                    |
 | `generate_pdf_by_default`  | Default PDF checkbox state in Create Invoice      | —                    |
 | `generate_xml_by_default`  | Default KSeF XML checkbox state in Create Invoice | —                    |
+
+### Update
+
+| Field              | Description                                                            | Default            |
+| ------------------ | ---------------------------------------------------------------------- | ------------------ |
+| `check_on_startup` | Check for a new release in the background at launch                    | `true`             |
+| `repository`       | GitHub repository to check, as `owner/name`                            | `zeusapps/Invoicer` |
+| `dismissed_version` | Version you chose to skip; set automatically when you click **Later** | —                  |
 
 ### Clients
 
