@@ -28,11 +28,24 @@ public static class ConfigManager
         return FromTomlTable(table);
     }
 
+    public const string LegacyBillingAccountKey = "DEFAULT";
+
+    public static string BackupPath => ConfigPath + ".bak";
+
     public static void Save(AppConfig config)
     {
         var dir = Path.GetDirectoryName(ConfigPath);
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
+
+        // The first save after migrating a legacy file drops the supplier bank keys that older
+        // versions read, so keep the original around for a downgrade.
+        if (config.PendingLegacyBackup)
+        {
+            if (File.Exists(ConfigPath))
+                File.Copy(ConfigPath, BackupPath, overwrite: true);
+            config.PendingLegacyBackup = false;
+        }
 
         var toml = ToTomlString(config);
         File.WriteAllText(ConfigPath, toml);
@@ -41,9 +54,11 @@ public static class ConfigManager
     private static AppConfig FromTomlTable(TomlTable table)
     {
         var config = new AppConfig();
+        TomlTable? supplierTable = null;
 
-        if (table.TryGetValue("supplier", out var supplierObj) && supplierObj is TomlTable supplierTable)
+        if (table.TryGetValue("supplier", out var supplierObj) && supplierObj is TomlTable supplierTableValue)
         {
+            supplierTable = supplierTableValue;
             config.Supplier = new SupplierConfig
             {
                 Name = GetString(supplierTable, "name"),
@@ -53,10 +68,23 @@ public static class ConfigManager
                 Vat = GetString(supplierTable, "vat"),
                 Address = GetString(supplierTable, "address"),
                 AddressUa = GetString(supplierTable, "address_ua"),
-                Iban = GetString(supplierTable, "iban"),
-                Bank = GetString(supplierTable, "bank"),
-                Swift = GetString(supplierTable, "swift"),
             };
+        }
+
+        if (table.TryGetValue("billing_accounts", out var accountsObj) && accountsObj is TomlTableArray accountsArray)
+        {
+            foreach (var accountTable in accountsArray)
+            {
+                config.BillingAccounts.Add(new BillingAccountConfig
+                {
+                    Key = GetString(accountTable, "key"),
+                    Label = GetString(accountTable, "label"),
+                    Iban = GetString(accountTable, "iban"),
+                    Bank = GetString(accountTable, "bank"),
+                    Swift = GetString(accountTable, "swift"),
+                    Currency = GetString(accountTable, "currency"),
+                });
+            }
         }
 
         if (table.TryGetValue("output", out var outputObj) && outputObj is TomlTable outputTable)
@@ -94,7 +122,9 @@ public static class ConfigManager
                     NameUa = GetString(clientTable, "name_ua"),
                     Address = GetString(clientTable, "address"),
                     AddressUa = GetString(clientTable, "address_ua"),
+                    Country = Countries.Normalize(GetString(clientTable, "country")),
                     Vat = GetString(clientTable, "vat"),
+                    BillingAccount = GetString(clientTable, "billing_account"),
                     Currency = GetString(clientTable, "currency", "PLN"),
                     VatRate = GetInt(clientTable, "vat_rate"),
                     ServiceDescription = GetString(clientTable, "service_description"),
@@ -108,7 +138,56 @@ public static class ConfigManager
             }
         }
 
+        MigrateLegacyBillingAccount(config, supplierTable);
+        InferMissingClientCountries(config);
+
         return config;
+    }
+
+    /// <summary>
+    /// Configs written before billing accounts existed kept a single account on [supplier].
+    /// It becomes the DEFAULT account for every client that has none.
+    /// </summary>
+    private static void MigrateLegacyBillingAccount(AppConfig config, TomlTable? supplierTable)
+    {
+        if (config.BillingAccounts.Count > 0 || supplierTable is null)
+            return;
+
+        var iban = GetString(supplierTable, "iban");
+        var bank = GetString(supplierTable, "bank");
+        var swift = GetString(supplierTable, "swift");
+        if (string.IsNullOrWhiteSpace(iban) && string.IsNullOrWhiteSpace(bank) && string.IsNullOrWhiteSpace(swift))
+            return;
+
+        config.BillingAccounts.Add(new BillingAccountConfig
+        {
+            Key = LegacyBillingAccountKey,
+            Label = "Default",
+            Iban = iban,
+            Bank = bank,
+            Swift = swift,
+        });
+
+        foreach (var client in config.Clients.Where(c => string.IsNullOrWhiteSpace(c.BillingAccount)))
+            client.BillingAccount = LegacyBillingAccountKey;
+
+        config.PendingLegacyBackup = true;
+    }
+
+    /// <summary>
+    /// Clients written before the country field existed get one only when their VAT carries an
+    /// EU prefix. Anything else stays empty: guessing a default country is the bug this replaces.
+    /// </summary>
+    private static void InferMissingClientCountries(AppConfig config)
+    {
+        foreach (var client in config.Clients.Where(c => string.IsNullOrWhiteSpace(c.Country)))
+        {
+            var vat = client.Vat.Trim();
+            if (vat.Length < 2)
+                continue;
+
+            client.Country = Countries.FromEuVatPrefix(vat[..2]) ?? "";
+        }
     }
 
     private static string ToTomlString(AppConfig config)
@@ -123,9 +202,18 @@ public static class ConfigManager
         WriteString(sb, "vat", config.Supplier.Vat);
         WriteString(sb, "address", config.Supplier.Address);
         WriteString(sb, "address_ua", config.Supplier.AddressUa);
-        WriteString(sb, "iban", config.Supplier.Iban);
-        WriteString(sb, "bank", config.Supplier.Bank);
-        WriteString(sb, "swift", config.Supplier.Swift);
+
+        foreach (var account in config.BillingAccounts)
+        {
+            sb.AppendLine();
+            sb.AppendLine("[[billing_accounts]]");
+            WriteString(sb, "key", account.Key);
+            WriteString(sb, "label", account.Label);
+            WriteString(sb, "iban", account.Iban);
+            WriteString(sb, "bank", account.Bank);
+            WriteString(sb, "swift", account.Swift);
+            WriteString(sb, "currency", account.Currency);
+        }
 
         sb.AppendLine();
         sb.AppendLine("[output]");
@@ -151,7 +239,9 @@ public static class ConfigManager
             WriteString(sb, "name_ua", client.NameUa);
             WriteString(sb, "address", client.Address);
             WriteString(sb, "address_ua", client.AddressUa);
+            WriteString(sb, "country", Countries.Normalize(client.Country));
             WriteString(sb, "vat", client.Vat);
+            WriteString(sb, "billing_account", client.BillingAccount);
             WriteString(sb, "currency", client.Currency);
             sb.AppendLine($"vat_rate = {client.VatRate}");
             WriteString(sb, "service_description", client.ServiceDescription);
@@ -234,9 +324,18 @@ public static class ConfigManager
                 Vat = "PL1111111111",
                 Address = "ul. Example 1/1, 00-000 Warsaw, Poland",
                 AddressUa = "вул. Приклад 1/1, 00-000 Варшава, Польща",
-                Iban = "PL00000000000000000000000000",
-                Bank = "Example Bank SA",
-                Swift = "EXMPPLPW",
+            },
+            BillingAccounts = new List<BillingAccountConfig>
+            {
+                new()
+                {
+                    Key = "PLN",
+                    Label = "Example Bank PLN",
+                    Iban = "PL00000000000000000000000000",
+                    Bank = "Example Bank SA",
+                    Swift = "EXMPPLPW",
+                    Currency = "PLN",
+                },
             },
             Output = new OutputConfig(),
             Clients = new List<ClientConfig>
@@ -248,7 +347,9 @@ public static class ConfigManager
                     NameUa = "ТОВ «Зразок»",
                     Address = "1 Main St., 00-000 Warsaw, Poland",
                     AddressUa = "вул. Головна 1, 00-000 Варшава, Польща",
+                    Country = Countries.Poland,
                     Vat = "PL9999999999",
+                    BillingAccount = "PLN",
                     Currency = "PLN",
                     VatRate = 23,
                     ServiceDescription = "Services according to agreement",

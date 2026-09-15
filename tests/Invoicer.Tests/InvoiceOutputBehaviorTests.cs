@@ -14,6 +14,7 @@ public class InvoiceOutputBehaviorTests
         var invoice = Invoice.Create(
             CreateClient(),
             CreateSupplier(),
+            CreateBillingAccount(),
             CreateOutput(),
             invoiceNumber: 1,
             invoiceDate: new DateTime(2026, 5, 11),
@@ -41,6 +42,7 @@ public class InvoiceOutputBehaviorTests
         var invoice = Invoice.Create(
             CreateClient(),
             CreateSupplier(),
+            CreateBillingAccount(),
             output,
             invoiceNumber: 12,
             invoiceDate: invoiceDate,
@@ -64,7 +66,9 @@ public class InvoiceOutputBehaviorTests
             Key = "EL",
             Name = "Client",
             Address = "Address",
+            Country = "PL",
             Vat = "PL1234567890",
+            BillingAccount = "PLN",
             Currency = "PLN",
             VatRate = 23,
             ServiceDescription = "Service",
@@ -83,8 +87,18 @@ public class InvoiceOutputBehaviorTests
             Name = "Supplier",
             Tin = "1234567890",
             Address = "Address",
+        };
+    }
+
+    private static BillingAccountConfig CreateBillingAccount()
+    {
+        return new BillingAccountConfig
+        {
+            Key = "PLN",
+            Label = "PLN account",
             Iban = "PL00102010260000004270201111",
             Swift = "EXAMPLE1",
+            Currency = "PLN",
         };
     }
 

@@ -34,6 +34,8 @@ public class SettingsView : View
         else
             BuildOutputFields(frame);
 
+        Scrolling.EnableVertical(frame);
+
         var saveButton = new Button { Text = "Save", X = 1, Y = Pos.AnchorEnd(2) };
         saveButton.Accepting += (_, e) => { e.Cancel = true; OnSave(); };
 
@@ -51,9 +53,6 @@ public class SettingsView : View
             ("VAT:", () => _config.Supplier.Vat, v => _config.Supplier.Vat = v),
             ("Address:", () => _config.Supplier.Address, v => _config.Supplier.Address = v),
             ("Address (UA):", () => _config.Supplier.AddressUa, v => _config.Supplier.AddressUa = v),
-            ("IBAN:", () => _config.Supplier.Iban, v => _config.Supplier.Iban = v),
-            ("Bank:", () => _config.Supplier.Bank, v => _config.Supplier.Bank = v),
-            ("SWIFT:", () => _config.Supplier.Swift, v => _config.Supplier.Swift = v),
         };
 
         int y = 1;

@@ -53,6 +53,7 @@ public class KsefXmlGeneratorTests
         var invoice = Invoice.Create(
             client,
             config.Supplier,
+            config.ResolveBillingAccount(client),
             config.Output,
             invoiceNumber: 1,
             invoiceDate: new DateTime(2026, 5, 11),
@@ -134,19 +135,245 @@ public class KsefXmlGeneratorTests
             ChildNames(seller?.Element(ns + "Adres")));
     }
 
-    [Fact]
-    public void Generate_KeepsBuyerIdentificationCountryCode()
+    public static TheoryData<string, string, string[], string[]> BuyerIdentificationCases => new()
+    {
+        { "PL", "PL9999999999", ["NIP", "Nazwa"], ["9999999999"] },
+        { "DE", "DE123456789", ["KodUE", "NrVatUE", "Nazwa"], ["DE", "123456789"] },
+        { "GR", "EL123456789", ["KodUE", "NrVatUE", "Nazwa"], ["EL", "123456789"] },
+        { "US", "12-3456789", ["KodKraju", "NrID", "Nazwa"], ["US", "12-3456789"] },
+        { "US", "", ["BrakID", "Nazwa"], ["1"] },
+    };
+
+    [Theory]
+    [MemberData(nameof(BuyerIdentificationCases))]
+    public void Generate_IdentifiesBuyerAccordingToClientCountry(
+        string country, string vat, string[] expectedElements, string[] expectedValues)
     {
         var invoice = CreateInvoice("2026/EL/0901", new DateTime(2026, 5, 11), 1234.56m, 23);
+        invoice.Client.Country = country;
+        invoice.Client.Vat = vat;
+        if (country != "PL")
+            MakeUntaxed(invoice);
+
+        KsefXmlGenerator.Generate(invoice, new FixedTimeProvider(GenerationInstant));
+
+        var doc = XDocument.Load(invoice.XmlPath);
+        XNamespace ns = KsefXmlGenerator.Metadata.Namespace;
+        var buyer = doc.Root?.Element(ns + "Podmiot2");
+        var identification = buyer?.Element(ns + "DaneIdentyfikacyjne");
+
+        Assert.Equal(expectedElements, ChildNames(identification));
+        Assert.Equal(
+            expectedValues.Append(invoice.Client.Name),
+            identification?.Elements().Select(e => e.Value));
+        Assert.Equal(country, buyer?.Element(ns + "Adres")?.Element(ns + "KodKraju")?.Value);
+
+        var messages = KsefSchemaValidator.Validate(invoice.XmlPath);
+        Assert.True(
+            messages.Count == 0,
+            $"Generated XML is not valid FA(3):{Environment.NewLine}{KsefSchemaValidator.Format(messages)}");
+    }
+
+    [Fact]
+    public void Generate_TakesBuyerAddressCountryFromClient_NotFromVatPrefix()
+    {
+        var invoice = CreateInvoice("2026/EL/0901", new DateTime(2026, 5, 11), 1234.56m, 23);
+        invoice.Client.Country = "US";
+        invoice.Client.Vat = "PL9999999999";
+        MakeUntaxed(invoice);
 
         KsefXmlGenerator.Generate(invoice);
 
         var doc = XDocument.Load(invoice.XmlPath);
         XNamespace ns = KsefXmlGenerator.Metadata.Namespace;
 
+        Assert.Equal("US", doc.Root?.Element(ns + "Podmiot2")?.Element(ns + "Adres")?.Element(ns + "KodKraju")?.Value);
+    }
+
+    [Theory]
+    [InlineData("", "PL9999999999", "Client country is required.")]
+    [InlineData("ZZ", "", "Client country 'ZZ' is not a recognized country code.")]
+    [InlineData("DE", "", "Client VAT is required for clients in DE.")]
+    [InlineData("PL", "", "Client VAT is required for clients in PL.")]
+    [InlineData("PL", "PL123", "Client VAT 'PL123' is not a valid Polish NIP.")]
+    [InlineData("DE", "FR12345678901", "Client VAT prefix 'FR' does not match client country DE (expected DE).")]
+    [InlineData("DE", "DE1234567890123", "Client VAT 'DE1234567890123' is not a valid EU VAT number.")]
+    public void Generate_RejectsInvalidClientCountryOrVat(string country, string vat, string expectedError)
+    {
+        var invoice = CreateInvoice("2026/EL/0901", new DateTime(2026, 5, 11), 1234.56m, 23);
+        invoice.Client.Country = country;
+        invoice.Client.Vat = vat;
+
+        var ex = Assert.Throws<KsefValidationException>(() => KsefXmlGenerator.Generate(invoice));
+
+        Assert.Contains(expectedError, ex.Errors);
+        Assert.False(File.Exists(invoice.XmlPath));
+    }
+
+    [Fact]
+    public void Generate_AcceptsNonEuClientWithoutVat()
+    {
+        var invoice = CreateInvoice("2026/EL/0901", new DateTime(2026, 5, 11), 1234.56m, 23);
+        invoice.Client.Country = "US";
+        invoice.Client.Vat = "";
+        MakeUntaxed(invoice);
+
+        Assert.Empty(KsefXmlGenerator.Validate(invoice));
+    }
+
+    [Fact]
+    public void Generate_CodesUsClientAsNpI()
+    {
+        var invoice = CreateInvoice("2026/GF/0001", new DateTime(2026, 9, 12), 2500m, 23);
+        invoice.Client.Country = "US";
+        invoice.Client.Vat = "";
+        MakeUntaxed(invoice);
+
+        KsefXmlGenerator.Generate(invoice, new FixedTimeProvider(GenerationInstant));
+
+        var (fa, seller) = LoadFaAndSeller(invoice);
+        XNamespace ns = KsefXmlGenerator.Metadata.Namespace;
+        Assert.Equal("np I", fa.Element(ns + "FaWiersz")?.Element(ns + "P_12")?.Value);
+        Assert.Equal("2500", fa.Element(ns + "P_13_8")?.Value);
+        Assert.DoesNotContain(fa.Elements(), e => e.Name.LocalName.StartsWith("P_14") || e.Name.LocalName == "P_13_1");
+        Assert.Equal("2500", fa.Element(ns + "P_15")?.Value);
+        Assert.Equal("1", fa.Element(ns + "Adnotacje")?.Element(ns + "P_18")?.Value);
+        Assert.Null(seller.Element(ns + "PrefiksPodatnika"));
+        AssertSchemaValid(invoice);
+    }
+
+    [Fact]
+    public void Generate_CodesEuClientAsNpII_WithSellerPrefix()
+    {
+        var invoice = CreateInvoice("2026/DE/0001", new DateTime(2026, 9, 12), 1000m, 23);
+        invoice.Client.Country = "DE";
+        invoice.Client.Vat = "DE123456789";
+        MakeUntaxed(invoice);
+
+        KsefXmlGenerator.Generate(invoice, new FixedTimeProvider(GenerationInstant));
+
+        var (fa, seller) = LoadFaAndSeller(invoice);
+        XNamespace ns = KsefXmlGenerator.Metadata.Namespace;
+        Assert.Equal("np II", fa.Element(ns + "FaWiersz")?.Element(ns + "P_12")?.Value);
+        Assert.Equal("1000", fa.Element(ns + "P_13_9")?.Value);
+        Assert.DoesNotContain(fa.Elements(), e => e.Name.LocalName.StartsWith("P_14"));
+        Assert.Equal("1000", fa.Element(ns + "P_15")?.Value);
+        Assert.Equal("1", fa.Element(ns + "Adnotacje")?.Element(ns + "P_18")?.Value);
+        Assert.Equal("PrefiksPodatnika", seller.Elements().First().Name.LocalName);
+        Assert.Equal("PL", seller.Element(ns + "PrefiksPodatnika")?.Value);
+        AssertSchemaValid(invoice);
+    }
+
+    [Theory]
+    [InlineData(23, "P_13_1", "P_14_1")]
+    [InlineData(8, "P_13_2", "P_14_2")]
+    [InlineData(5, "P_13_3", "P_14_3")]
+    public void Generate_CodesPolishClientWithNumericRate(int rate, string netField, string vatField)
+    {
+        var invoice = CreateInvoice("2026/EL/0901", new DateTime(2026, 5, 11), 1000m, rate);
+
+        KsefXmlGenerator.Generate(invoice, new FixedTimeProvider(GenerationInstant));
+
+        var (fa, seller) = LoadFaAndSeller(invoice);
+        XNamespace ns = KsefXmlGenerator.Metadata.Namespace;
+        Assert.Equal(rate.ToString(), fa.Element(ns + "FaWiersz")?.Element(ns + "P_12")?.Value);
+        Assert.Equal("1000", fa.Element(ns + netField)?.Value);
+        Assert.Equal(invoice.VatAmount.ToString("0.##", CultureInfo.InvariantCulture), fa.Element(ns + vatField)?.Value);
+        Assert.Equal(invoice.GrossAmount.ToString("0.##", CultureInfo.InvariantCulture), fa.Element(ns + "P_15")?.Value);
+        Assert.Equal("2", fa.Element(ns + "Adnotacje")?.Element(ns + "P_18")?.Value);
+        Assert.Null(seller.Element(ns + "PrefiksPodatnika"));
+        AssertSchemaValid(invoice);
+    }
+
+    [Theory]
+    [InlineData("US", 23, "Client VAT rate must be 0 for clients outside Poland (country US), not 23%.")]
+    [InlineData("PL", 0, "Client VAT rate 0% is not supported for KSeF invoices to Polish clients (supported: 23, 22, 8, 7, 5).")]
+    public void Generate_RejectsVatRateInconsistentWithCountry(string country, int rate, string expectedError)
+    {
+        var invoice = CreateInvoice("2026/EL/0901", new DateTime(2026, 5, 11), 1000m, rate);
+        invoice.Client.Country = country;
+        invoice.Client.Vat = country == "PL" ? "PL9999999999" : "";
+
+        var ex = Assert.Throws<KsefValidationException>(() => KsefXmlGenerator.Generate(invoice));
+
+        Assert.Contains(expectedError, ex.Errors);
+        Assert.False(File.Exists(invoice.XmlPath));
+    }
+
+    private static void MakeUntaxed(Invoice invoice)
+    {
+        invoice.Client.VatRate = 0;
+        invoice.VatRate = 0;
+        invoice.VatAmount = 0;
+        invoice.GrossAmount = invoice.NetAmount;
+    }
+
+    private static (XElement Fa, XElement Seller) LoadFaAndSeller(Invoice invoice)
+    {
+        XNamespace ns = KsefXmlGenerator.Metadata.Namespace;
+        var root = XDocument.Load(invoice.XmlPath).Root!;
+        return (root.Element(ns + "Fa")!, root.Element(ns + "Podmiot1")!);
+    }
+
+    private static void AssertSchemaValid(Invoice invoice)
+    {
+        var messages = KsefSchemaValidator.Validate(invoice.XmlPath);
+        Assert.True(
+            messages.Count == 0,
+            $"Generated XML is not valid FA(3):{Environment.NewLine}{KsefSchemaValidator.Format(messages)}");
+    }
+
+    [Fact]
+    public void Generate_RejectsBillingAccountWithoutIban()
+    {
+        var invoice = CreateInvoice("2026/EL/0901", new DateTime(2026, 5, 11), 1234.56m, 23);
+        invoice.BillingAccount.Iban = " ";
+
+        var ex = Assert.Throws<KsefValidationException>(() => KsefXmlGenerator.Generate(invoice));
+
+        Assert.Contains("Billing account 'PLN' IBAN is required.", ex.Errors);
+        Assert.False(File.Exists(invoice.XmlPath));
+    }
+
+    [Fact]
+    public void Generate_WritesPaymentDetailsFromBillingAccount()
+    {
+        var invoice = CreateInvoice("2026/EL/0901", new DateTime(2026, 5, 11), 1234.56m, 23);
+        invoice.BillingAccount = new BillingAccountConfig
+        {
+            Key = "USD",
+            Iban = "PL42 1090 1320 0000 0001 5470 1995",
+            Swift = "WBKPPLPP",
+            Bank = "Santander",
+        };
+
+        KsefXmlGenerator.Generate(invoice);
+
+        var account = PaymentAccount(invoice);
+        Assert.Equal(new[] { "NrRB", "SWIFT", "NazwaBanku" }, ChildNames(account));
         Assert.Equal(
-            new[] { "KodKraju", "NrID", "Nazwa" },
-            ChildNames(doc.Root?.Element(ns + "Podmiot2")?.Element(ns + "DaneIdentyfikacyjne")));
+            new[] { "PL42109013200000000154701995", "WBKPPLPP", "Santander" },
+            account?.Elements().Select(e => e.Value));
+        Assert.Empty(KsefSchemaValidator.Validate(invoice.XmlPath));
+    }
+
+    [Fact]
+    public void Generate_WritesOnlyAccountNumber_WhenSwiftAndBankAreEmpty()
+    {
+        var invoice = CreateInvoice("2026/EL/0901", new DateTime(2026, 5, 11), 1234.56m, 23);
+        invoice.BillingAccount = new BillingAccountConfig { Key = "PLN", Iban = "PL42109013200000000154701995" };
+
+        KsefXmlGenerator.Generate(invoice);
+
+        Assert.Equal(new[] { "NrRB" }, ChildNames(PaymentAccount(invoice)));
+        Assert.Empty(KsefSchemaValidator.Validate(invoice.XmlPath));
+    }
+
+    private static XElement? PaymentAccount(Invoice invoice)
+    {
+        XNamespace ns = KsefXmlGenerator.Metadata.Namespace;
+        return XDocument.Load(invoice.XmlPath).Root?
+            .Element(ns + "Fa")?.Element(ns + "Platnosc")?.Element(ns + "RachunekBankowy");
     }
 
     [Fact]
@@ -236,9 +463,12 @@ public class KsefXmlGeneratorTests
             fixture.Root?.Element(ns + "Podmiot1")?.Element(ns + "DaneIdentyfikacyjne")?.Element(ns + "NIP")?.Value,
             generated.Root?.Element(ns + "Podmiot1")?.Element(ns + "DaneIdentyfikacyjne")?.Element(ns + "NIP")?.Value);
 
+        // The drafts identified the Polish buyer by NrID with a PL prefix; the correct TPodmiot2
+        // form for a Polish buyer is NIP, which carries the same number without the prefix.
+        var fixtureBuyerId = fixture.Root?.Element(ns + "Podmiot2")?.Element(ns + "DaneIdentyfikacyjne")?.Element(ns + "NrID")?.Value;
         Assert.Equal(
-            fixture.Root?.Element(ns + "Podmiot2")?.Element(ns + "DaneIdentyfikacyjne")?.Element(ns + "NrID")?.Value,
-            generated.Root?.Element(ns + "Podmiot2")?.Element(ns + "DaneIdentyfikacyjne")?.Element(ns + "NrID")?.Value);
+            fixtureBuyerId is { } id && id.StartsWith("PL", StringComparison.Ordinal) ? id[2..] : fixtureBuyerId,
+            generated.Root?.Element(ns + "Podmiot2")?.Element(ns + "DaneIdentyfikacyjne")?.Element(ns + "NIP")?.Value);
 
         Assert.Equal(
             fixture.Root?.Element(ns + "Podmiot2")?.Element(ns + "JST")?.Value,
@@ -271,7 +501,9 @@ public class KsefXmlGeneratorTests
             Key = "EL",
             Name = "Sample Client Sp. z o.o.",
             Address = "10 Example Street, 00-001 Warsaw, Poland",
+            Country = "PL",
             Vat = "PL9999999999",
+            BillingAccount = "PLN",
             Currency = "PLN",
             VatRate = vatRate,
             ServiceDescription = "Consulting services",
@@ -289,9 +521,16 @@ public class KsefXmlGeneratorTests
             Regon = "",
             Vat = "",
             Address = "1 Demo Avenue, 00-002 Warsaw, Poland",
+        };
+
+        var billingAccount = new BillingAccountConfig
+        {
+            Key = "PLN",
+            Label = "PLN account",
             Iban = "PL00102010260000004270201111",
             Bank = "",
             Swift = "EXAMPLE1",
+            Currency = "PLN",
         };
 
         var output = new OutputConfig
@@ -304,6 +543,7 @@ public class KsefXmlGeneratorTests
         var invoice = Invoice.Create(
             client,
             supplier,
+            billingAccount,
             output,
             invoiceNumber: int.Parse(formattedNumber.Split('/').Last()),
             invoiceDate: invoiceDate,

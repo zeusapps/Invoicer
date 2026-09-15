@@ -76,10 +76,24 @@ public static class KsefXmlGenerator
 
         if (string.IsNullOrWhiteSpace(invoice.Client.Name))
             errors.Add("Client name is required.");
-        if (string.IsNullOrWhiteSpace(invoice.Client.Vat))
-            errors.Add("Client VAT/NrID is required.");
         if (string.IsNullOrWhiteSpace(invoice.Client.Address))
             errors.Add("Client address is required.");
+
+        var (_, identificationError) = BuyerIdentification.Resolve(invoice.Client.Country, invoice.Client.Vat);
+        if (identificationError is not null)
+        {
+            errors.Add(identificationError);
+        }
+        else
+        {
+            // Only meaningful once the country is known to be valid.
+            var (_, rateError) = TaxRateCoding.Resolve(invoice.Client.Country, invoice.VatRate);
+            if (rateError is not null)
+                errors.Add(rateError);
+        }
+
+        if (string.IsNullOrWhiteSpace(invoice.BillingAccount.Iban))
+            errors.Add($"Billing account '{invoice.BillingAccount.Key}' IBAN is required.");
 
         return errors;
     }
@@ -105,17 +119,31 @@ public static class KsefXmlGenerator
     {
         writer.WriteStartElement(elementName);
 
-        // TPodmiot1 is a closed sequence of NIP + Nazwa, so only the buyer may carry a
-        // country code alongside its identifier. The seller's country lives in Adres.
+        if (!string.IsNullOrWhiteSpace(party.EuVatPrefix))
+            writer.WriteElementString("PrefiksPodatnika", party.EuVatPrefix);
+
+        // TPodmiot1 is a closed sequence of NIP + Nazwa, so the seller is always the Nip form;
+        // only the buyer uses the other TPodmiot2 choices. The seller's country lives in Adres.
         writer.WriteStartElement("DaneIdentyfikacyjne");
-        if (!string.IsNullOrWhiteSpace(party.IdentifierCountryCode))
-            writer.WriteElementString("KodKraju", party.IdentifierCountryCode);
-
-        if (!string.IsNullOrWhiteSpace(party.Nip))
-            writer.WriteElementString("NIP", party.Nip);
-
-        if (!string.IsNullOrWhiteSpace(party.Identifier))
-            writer.WriteElementString("NrID", party.Identifier);
+        switch (party.Identification)
+        {
+            case BuyerIdentification.Nip nip:
+                writer.WriteElementString("NIP", nip.Value);
+                break;
+            case BuyerIdentification.EuVat euVat:
+                writer.WriteElementString("KodUE", euVat.CountryPrefix);
+                writer.WriteElementString("NrVatUE", euVat.Number);
+                break;
+            case BuyerIdentification.ForeignId foreignId:
+                writer.WriteElementString("KodKraju", foreignId.CountryCode);
+                writer.WriteElementString("NrID", foreignId.Identifier);
+                break;
+            case BuyerIdentification.NoId:
+                writer.WriteElementString("BrakID", "1");
+                break;
+            default:
+                throw new InvalidOperationException($"Unsupported identification {party.Identification.GetType().Name}.");
+        }
 
         writer.WriteElementString("Nazwa", party.Name);
         writer.WriteEndElement();
@@ -143,14 +171,18 @@ public static class KsefXmlGenerator
         writer.WriteElementString("P_1", body.InvoiceDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
         writer.WriteElementString("P_2", body.InvoiceNumber);
 
-        writer.WriteElementString("P_13_1", body.NetAmount.ToString("0.##", CultureInfo.InvariantCulture));
-        writer.WriteElementString("P_14_1", body.VatAmount.ToString("0.##", CultureInfo.InvariantCulture));
+        // One summary pair per invoice, chosen by the rate coding: P_13_1..3 carry a Polish tax
+        // amount in P_14_n; P_13_8/P_13_9 (np I / np II) have no tax amount at all.
+        var summary = body.TaxRate.SummaryIndex.ToString(CultureInfo.InvariantCulture);
+        writer.WriteElementString($"P_13_{summary}", body.NetAmount.ToString("0.##", CultureInfo.InvariantCulture));
+        if (body.TaxRate.HasTaxAmount)
+            writer.WriteElementString($"P_14_{summary}", body.VatAmount.ToString("0.##", CultureInfo.InvariantCulture));
         writer.WriteElementString("P_15", body.GrossAmount.ToString("0.##", CultureInfo.InvariantCulture));
 
         writer.WriteStartElement("Adnotacje");
         writer.WriteElementString("P_16", "2");
         writer.WriteElementString("P_17", "2");
-        writer.WriteElementString("P_18", "2");
+        writer.WriteElementString("P_18", body.TaxRate.ReverseCharge ? "1" : "2");
         writer.WriteElementString("P_18A", "2");
         writer.WriteStartElement("Zwolnienie");
         writer.WriteElementString("P_19N", "1");
@@ -173,7 +205,7 @@ public static class KsefXmlGenerator
         writer.WriteElementString("P_8B", body.Line.Quantity.ToString("0.##", CultureInfo.InvariantCulture));
         writer.WriteElementString("P_9A", body.Line.UnitNetAmount.ToString("0.##", CultureInfo.InvariantCulture));
         writer.WriteElementString("P_11", body.Line.NetAmount.ToString("0.##", CultureInfo.InvariantCulture));
-        writer.WriteElementString("P_12", body.Line.VatRatePercent.ToString(CultureInfo.InvariantCulture));
+        writer.WriteElementString("P_12", body.TaxRate.RateCode);
         writer.WriteEndElement();
 
         writer.WriteStartElement("Platnosc");
@@ -182,6 +214,8 @@ public static class KsefXmlGenerator
         writer.WriteElementString("NrRB", body.Payment.Iban);
         if (!string.IsNullOrWhiteSpace(body.Payment.Swift))
             writer.WriteElementString("SWIFT", body.Payment.Swift);
+        if (!string.IsNullOrWhiteSpace(body.Payment.BankName))
+            writer.WriteElementString("NazwaBanku", body.Payment.BankName);
         writer.WriteEndElement();
         writer.WriteEndElement();
 
@@ -192,8 +226,14 @@ public static class KsefXmlGenerator
     {
         public static KsefInvoiceDocument FromInvoice(Invoice invoice, TimeProvider timeProvider)
         {
-            var buyerCountryCode = ExtractCountryCode(invoice.Client.Vat);
-            var buyerIdentifier = invoice.Client.Vat;
+            var (buyerIdentification, identificationError) =
+                BuyerIdentification.Resolve(invoice.Client.Country, invoice.Client.Vat);
+            if (buyerIdentification is null)
+                throw new InvalidOperationException(identificationError);
+
+            var (taxRate, rateError) = TaxRateCoding.Resolve(invoice.Client.Country, invoice.VatRate);
+            if (taxRate is null)
+                throw new InvalidOperationException(rateError);
 
             return new KsefInvoiceDocument(
                 new KsefHeader(
@@ -206,18 +246,16 @@ public static class KsefXmlGenerator
                     timeProvider.GetUtcNow().UtcDateTime,
                     Metadata.SystemInfo),
                 new KsefParty(
-                    IdentifierCountryCode: null,
-                    Nip: invoice.Supplier.Tin,
-                    Identifier: null,
+                    EuVatPrefix: taxRate.SellerEuPrefix,
+                    Identification: new BuyerIdentification.Nip(invoice.Supplier.Tin),
                     Name: invoice.Supplier.Name,
-                    AddressCountryCode: "PL",
+                    AddressCountryCode: Countries.Poland,
                     AddressLine1: NormalizeWhitespace(invoice.Supplier.Address)),
                 new KsefParty(
-                    IdentifierCountryCode: buyerCountryCode,
-                    Nip: null,
-                    Identifier: buyerIdentifier,
+                    EuVatPrefix: null,
+                    Identification: buyerIdentification,
                     Name: invoice.Client.Name,
-                    AddressCountryCode: buyerCountryCode,
+                    AddressCountryCode: Countries.Normalize(invoice.Client.Country),
                     AddressLine1: NormalizeWhitespace(invoice.Client.Address)),
                 new KsefInvoiceBody(
                     CurrencyCode: invoice.Currency,
@@ -226,24 +264,23 @@ public static class KsefXmlGenerator
                     NetAmount: invoice.NetAmount,
                     VatAmount: invoice.VatAmount,
                     GrossAmount: invoice.GrossAmount,
+                    TaxRate: taxRate,
                     Line: new KsefInvoiceLine(
                         Description: invoice.ServiceDescription,
                         UnitCode: "szt",
                         Quantity: 1m,
                         UnitNetAmount: invoice.NetAmount,
-                        NetAmount: invoice.NetAmount,
-                        VatRatePercent: invoice.VatRate),
+                        NetAmount: invoice.NetAmount),
                     Payment: new KsefPayment(
-                        Iban: invoice.Supplier.Iban,
-                        Swift: invoice.Supplier.Swift))
+                        Iban: RemoveWhitespace(invoice.BillingAccount.Iban),
+                        Swift: invoice.BillingAccount.Swift.Trim(),
+                        BankName: invoice.BillingAccount.Bank.Trim()))
             );
         }
 
-        private static string ExtractCountryCode(string identifier)
+        private static string RemoveWhitespace(string value)
         {
-            if (identifier.Length >= 2 && char.IsLetter(identifier[0]) && char.IsLetter(identifier[1]))
-                return identifier.Substring(0, 2).ToUpperInvariant();
-            return "PL";
+            return string.Concat(value.Where(c => !char.IsWhiteSpace(c)));
         }
 
         private static string NormalizeWhitespace(string value)
@@ -261,9 +298,8 @@ public static class KsefXmlGenerator
         string SystemInfo);
 
     internal sealed record KsefParty(
-        string? IdentifierCountryCode,
-        string? Nip,
-        string? Identifier,
+        string? EuVatPrefix,
+        BuyerIdentification Identification,
         string Name,
         string AddressCountryCode,
         string AddressLine1);
@@ -275,6 +311,7 @@ public static class KsefXmlGenerator
         decimal NetAmount,
         decimal VatAmount,
         decimal GrossAmount,
+        TaxRateCoding TaxRate,
         KsefInvoiceLine Line,
         KsefPayment Payment);
 
@@ -283,10 +320,9 @@ public static class KsefXmlGenerator
         string UnitCode,
         decimal Quantity,
         decimal UnitNetAmount,
-        decimal NetAmount,
-        int VatRatePercent);
+        decimal NetAmount);
 
-    internal sealed record KsefPayment(string Iban, string? Swift);
+    internal sealed record KsefPayment(string Iban, string? Swift, string? BankName);
 }
 
 public sealed class KsefValidationException : Exception

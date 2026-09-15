@@ -165,17 +165,20 @@ public class CreateInvoiceView : View
             generateButton
         );
 
-        // Preview
+        // Preview: sized to its text so the frame can scroll when the preview is taller than the window.
         _previewLabel = new Label
         {
             X = 1,
             Y = 1,
             Width = Dim.Fill(1),
-            Height = Dim.Fill(1),
+            Height = Dim.Auto(DimAutoStyle.Text),
             Text = "",
             HotKeySpecifier = (Rune)0xFFFF,
         };
         previewFrame.Add(_previewLabel);
+
+        Scrolling.EnableVertical(formFrame);
+        Scrolling.EnableVertical(previewFrame);
 
         Add(formFrame, previewFrame);
 
@@ -237,9 +240,13 @@ public class CreateInvoiceView : View
             .Replace("{date}", date.ToString("yyyyMMdd"))
             .Replace("{client}", client.Key);
 
+        var account = _config.FindBillingAccount(client);
+        var accountText = account is null ? "(none assigned)" : $"{account.Label} {account.Iban}";
+
         _previewLabel.Text =
             $"Invoice: {formattedNum}\n" +
             $"Client:  {client.Name}\n" +
+            $"Account: {accountText}\n" +
             $"Date:    {date:dd.MM.yyyy}\n" +
             $"Service: {serviceMonth:MMMM yyyy}\n" +
             $"\n" +
@@ -303,9 +310,23 @@ public class CreateInvoiceView : View
         _config.Output.GenerateXmlByDefault = generateXml;
 
         var client = _enabledClients[SelectedClientIndex];
+
+        // Resolved before any generator runs, so a bad account reference produces no files at all.
+        BillingAccountConfig billingAccount;
+        try
+        {
+            billingAccount = _config.ResolveBillingAccount(client);
+        }
+        catch (BillingAccountNotFoundException ex)
+        {
+            MessageBox.ErrorQuery("Billing Account Missing", ex.Message, "OK");
+            return;
+        }
+
         var invoice = Invoice.Create(
             client,
             _config.Supplier,
+            billingAccount,
             _config.Output,
             invoiceNumber,
             ParseDate(),

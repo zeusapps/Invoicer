@@ -7,7 +7,9 @@ public class ClientConfig
     public string NameUa { get; set; } = "";
     public string Address { get; set; } = "";
     public string AddressUa { get; set; } = "";
+    public string Country { get; set; } = "";
     public string Vat { get; set; } = "";
+    public string BillingAccount { get; set; } = "";
     public string Currency { get; set; } = "PLN";
     public int VatRate { get; set; }
     public string ServiceDescription { get; set; } = "";

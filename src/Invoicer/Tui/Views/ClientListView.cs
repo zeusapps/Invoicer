@@ -15,10 +15,13 @@ public class ClientListView : View
     private int _previousClientIndex = -1;
     private readonly RadioGroup _monthRuleRadio;
     private readonly Button _toggleEnabledButton;
+    private readonly Label _accountLabel;
+    private readonly Label _accountWarningLabel;
+    private string _selectedAccountKey = "";
     private readonly string[] _monthRuleValues = ["early_previous", "early_current"];
     private readonly string[] _fieldLabels =
     [
-        "Key:", "Name:", "Name (UA):", "Address:", "Address (UA):",
+        "Key:", "Name:", "Name (UA):", "Address:", "Address (UA):", "Country:",
         "Currency:", "Default Amt:", "VAT:", "VAT Rate:",
         "Service Desc:", "Service (UA):", "Prefix:",
     ];
@@ -84,8 +87,22 @@ public class ClientListView : View
             detailFrame.Add(_fields[i]);
         }
 
+        // Billing account: chosen from the defined accounts rather than typed, so it cannot
+        // reference a key that does not exist.
+        int accountY = _fieldLabels.Length * 2;
+        detailFrame.Add(new Label { Text = "Account:", X = 1, Y = accountY });
+        _accountLabel = new Label { X = 16, Y = accountY, Width = Dim.Fill(14), Text = "" };
+        var chooseAccountButton = new Button { Text = "Choose…", X = Pos.AnchorEnd(12), Y = accountY };
+        chooseAccountButton.Accepting += (_, e) => { e.Cancel = true; OnChooseAccount(); };
+        // Below the button's shadow row, so a long warning is not drawn underneath it.
+        _accountWarningLabel = new Label { X = 16, Y = accountY + 2, Width = Dim.Fill(2), Text = "" };
+        detailFrame.Add(_accountLabel, chooseAccountButton, _accountWarningLabel);
+
+        // Currency drives the mismatch warning, so re-check it once the field is edited.
+        _fields[6].HasFocusChanged += (_, e) => { if (!e.NewValue) UpdateAccountDisplay(); };
+
         // Month Rule radio group
-        int radioY = _fieldLabels.Length * 2;
+        int radioY = accountY + 3;
         detailFrame.Add(new Label { Text = "Month Rule:", X = 1, Y = radioY });
         _monthRuleRadio = new RadioGroup
         {
@@ -94,6 +111,9 @@ public class ClientListView : View
             RadioLabels = ["Early → Previous Month", "Early → Current Month"],
         };
         detailFrame.Add(_monthRuleRadio);
+
+        Scrolling.EnableVertical(detailFrame);
+        Scrolling.ShowScrollBarWhenNeeded(_listView);
 
         // Buttons at bottom
         var addButton = new Button { Text = "Add", X = 1, Y = Pos.AnchorEnd(2) };
@@ -144,13 +164,15 @@ public class ClientListView : View
         client.NameUa = _fields[2].Text?.ToString() ?? "";
         client.Address = _fields[3].Text?.ToString() ?? "";
         client.AddressUa = _fields[4].Text?.ToString() ?? "";
-        client.Currency = _fields[5].Text?.ToString() ?? "";
-        if (decimal.TryParse(_fields[6].Text?.ToString(), CultureInfo.InvariantCulture, out var amt)) client.DefaultAmount = amt;
-        client.Vat = _fields[7].Text?.ToString() ?? "";
-        if (int.TryParse(_fields[8].Text?.ToString(), out var rate)) client.VatRate = rate;
-        client.ServiceDescription = _fields[9].Text?.ToString() ?? "";
-        client.ServiceDescriptionUa = _fields[10].Text?.ToString() ?? "";
-        client.InvoicePrefix = _fields[11].Text?.ToString() ?? "";
+        client.Country = Countries.Normalize(_fields[5].Text?.ToString());
+        client.Currency = _fields[6].Text?.ToString() ?? "";
+        if (decimal.TryParse(_fields[7].Text?.ToString(), CultureInfo.InvariantCulture, out var amt)) client.DefaultAmount = amt;
+        client.Vat = _fields[8].Text?.ToString() ?? "";
+        if (int.TryParse(_fields[9].Text?.ToString(), out var rate)) client.VatRate = rate;
+        client.ServiceDescription = _fields[10].Text?.ToString() ?? "";
+        client.ServiceDescriptionUa = _fields[11].Text?.ToString() ?? "";
+        client.InvoicePrefix = _fields[12].Text?.ToString() ?? "";
+        client.BillingAccount = _selectedAccountKey;
         client.MonthOffsetRule = _monthRuleValues[_monthRuleRadio.SelectedItem];
     }
 
@@ -170,15 +192,92 @@ public class ClientListView : View
         _fields[2].Text = client.NameUa;
         _fields[3].Text = client.Address;
         _fields[4].Text = client.AddressUa;
-        _fields[5].Text = client.Currency;
-        _fields[6].Text = client.DefaultAmount.ToString("F2", CultureInfo.InvariantCulture);
-        _fields[7].Text = client.Vat;
-        _fields[8].Text = client.VatRate.ToString();
-        _fields[9].Text = client.ServiceDescription;
-        _fields[10].Text = client.ServiceDescriptionUa;
-        _fields[11].Text = client.InvoicePrefix;
+        _fields[5].Text = client.Country;
+        _fields[6].Text = client.Currency;
+        _fields[7].Text = client.DefaultAmount.ToString("F2", CultureInfo.InvariantCulture);
+        _fields[8].Text = client.Vat;
+        _fields[9].Text = client.VatRate.ToString();
+        _fields[10].Text = client.ServiceDescription;
+        _fields[11].Text = client.ServiceDescriptionUa;
+        _fields[12].Text = client.InvoicePrefix;
+        _selectedAccountKey = client.BillingAccount;
+        UpdateAccountDisplay();
         var ruleIndex = Array.IndexOf(_monthRuleValues, client.MonthOffsetRule);
         _monthRuleRadio.SelectedItem = ruleIndex >= 0 ? ruleIndex : 0;
+    }
+
+    private void UpdateAccountDisplay()
+    {
+        var account = _config.BillingAccounts.FirstOrDefault(a =>
+            _selectedAccountKey.Length > 0 && a.Key == _selectedAccountKey);
+
+        _accountLabel.Text = account is not null
+            ? $"{account.Key} – {account.Label}"
+            : _selectedAccountKey.Length > 0
+                ? $"(unknown account '{_selectedAccountKey}')"
+                : "(none assigned)";
+
+        var editedCurrency = new ClientConfig { Currency = _fields[6].Text?.ToString() ?? "" };
+        var warning = BillingAccountRules.CurrencyMismatchWarning(editedCurrency, account);
+        _accountWarningLabel.Text = warning is null ? "" : $"⚠ {warning}";
+    }
+
+    private void OnChooseAccount()
+    {
+        if (_config.BillingAccounts.Count == 0)
+        {
+            MessageBox.ErrorQuery("No Billing Accounts",
+                "Define an account in Settings > Billing Accounts first.", "OK");
+            return;
+        }
+
+        var dialog = new Dialog
+        {
+            Title = "Choose Billing Account",
+            Width = Dim.Percent(60),
+            Height = Math.Min(_config.BillingAccounts.Count + 6, 20),
+        };
+
+        var items = _config.BillingAccounts
+            .Select(a => string.IsNullOrWhiteSpace(a.Currency) ? $"{a.Key} – {a.Label}" : $"{a.Key} – {a.Label} ({a.Currency})")
+            .ToList();
+        var list = new ListView
+        {
+            X = 0,
+            Y = 0,
+            Width = Dim.Fill(),
+            Height = Dim.Fill(1),
+        };
+        list.SetSource(new ObservableCollection<string>(items));
+        var currentIndex = _config.BillingAccounts.FindIndex(a => a.Key == _selectedAccountKey);
+        list.SelectedItem = currentIndex >= 0 ? currentIndex : 0;
+
+        string? chosenKey = null;
+        void Choose()
+        {
+            if (list.SelectedItem >= 0 && list.SelectedItem < _config.BillingAccounts.Count)
+                chosenKey = _config.BillingAccounts[list.SelectedItem].Key;
+            Application.RequestStop(dialog);
+        }
+
+        list.OpenSelectedItem += (_, _) => Choose();
+
+        var okButton = new Button { Text = "OK", IsDefault = true };
+        okButton.Accepting += (_, e) => { e.Cancel = true; Choose(); };
+        var cancelButton = new Button { Text = "Cancel" };
+        cancelButton.Accepting += (_, e) => { e.Cancel = true; Application.RequestStop(dialog); };
+
+        dialog.Add(list);
+        dialog.AddButton(okButton);
+        dialog.AddButton(cancelButton);
+        list.SetFocus();
+        Application.Run(dialog);
+        dialog.Dispose();
+
+        if (chosenKey is null) return;
+
+        _selectedAccountKey = chosenKey;
+        UpdateAccountDisplay();
     }
 
     private void RefreshListViewSource()
@@ -240,6 +339,7 @@ public class ClientListView : View
             Key = $"CLIENT{_config.Clients.Count + 1}",
             Currency = "PLN",
             MonthOffsetRule = "early_previous",
+            BillingAccount = _config.BillingAccounts.FirstOrDefault()?.Key ?? "",
         };
         _config.Clients.Add(newClient);
         RefreshListViewSource();
@@ -267,6 +367,8 @@ public class ClientListView : View
             else
             {
                 foreach (var f in _fields) f.Text = "";
+                _selectedAccountKey = "";
+                UpdateAccountDisplay();
             }
         }
     }

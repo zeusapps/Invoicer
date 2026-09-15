@@ -57,6 +57,7 @@ public class InvoicerApp
                     new MenuBarItem("_Settings", new MenuItem[]
                     {
                         new("_Supplier Info", "", () => Application.Invoke(() => ShowSettings("supplier"))),
+                        new("_Billing Accounts", "", () => Application.Invoke(() => ShowView(new BillingAccountListView(_config)))),
                         new("_Output Settings", "", () => Application.Invoke(() => ShowSettings("output"))),
                     }),
                     new MenuBarItem("_Help", new MenuItem[]
@@ -104,6 +105,7 @@ public class InvoicerApp
             Key = $"CLIENT{_config.Clients.Count + 1}",
             Currency = "PLN",
             MonthOffsetRule = "early_previous",
+            BillingAccount = _config.BillingAccounts.FirstOrDefault()?.Key ?? "",
         };
         _config.Clients.Add(newClient);
         var view = new ClientListView(_config, () => ShowClientList());

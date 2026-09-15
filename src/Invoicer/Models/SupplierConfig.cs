@@ -9,7 +9,4 @@ public class SupplierConfig
     public string Vat { get; set; } = "";
     public string Address { get; set; } = "";
     public string AddressUa { get; set; } = "";
-    public string Iban { get; set; } = "";
-    public string Bank { get; set; } = "";
-    public string Swift { get; set; } = "";
 }

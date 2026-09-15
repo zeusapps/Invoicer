@@ -75,14 +75,10 @@ public static class PdfGenerator
                             $"{invoice.Supplier.Address}\n{invoice.Supplier.AddressUa}");
 
                         AddInfoRow(table, "Customer / Замовник:",
-                            $"{invoice.Client.Name} / {invoice.Client.NameUa}\n" +
-                            $"VAT: {invoice.Client.Vat}\n" +
-                            $"{invoice.Client.Address}\n{invoice.Client.AddressUa}");
+                            InvoiceText.CustomerBlock(invoice));
 
                         AddInfoRow(table, "Bank account / Банківський рахунок:",
-                            $"IBAN: {invoice.Supplier.Iban}\n" +
-                            $"Bank: {invoice.Supplier.Bank}\n" +
-                            $"SWIFT: {invoice.Supplier.Swift}");
+                            InvoiceText.BankAccountBlock(invoice));
 
                         AddInfoRow(table, "Payment method / Спосіб оплати:",
                             "Bank transfer / Банківський переказ");

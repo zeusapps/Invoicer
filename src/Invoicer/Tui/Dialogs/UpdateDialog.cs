@@ -60,6 +60,7 @@ public static class UpdateDialog
                 : release.Notes.Replace("\r\n", "\n"),
         };
         notesFrame.Add(notes);
+        Scrolling.ShowScrollBarWhenNeeded(notes);
 
         var installButton = new Button { Text = "Install and Restart", IsDefault = true };
         installButton.Accepting += (_, e) =>

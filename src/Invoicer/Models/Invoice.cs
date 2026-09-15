@@ -4,6 +4,7 @@ public class Invoice
 {
     public required ClientConfig Client { get; set; }
     public required SupplierConfig Supplier { get; set; }
+    public required BillingAccountConfig BillingAccount { get; set; }
 
     public string InvoiceNumber { get; set; } = "";
     public string FormattedNumber { get; set; } = "";
@@ -32,6 +33,7 @@ public class Invoice
     public static Invoice Create(
         ClientConfig client,
         SupplierConfig supplier,
+        BillingAccountConfig billingAccount,
         OutputConfig output,
         int invoiceNumber,
         DateTime invoiceDate,
@@ -54,6 +56,7 @@ public class Invoice
         {
             Client = client,
             Supplier = supplier,
+            BillingAccount = billingAccount,
             InvoiceNumber = invoiceNumber.ToString(),
             FormattedNumber = formattedNumber,
             InvoiceDate = invoiceDate,
