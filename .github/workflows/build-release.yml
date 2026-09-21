@@ -29,14 +29,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      # Annotated tag messages become the release notes. A shallow clone does not
-      # fetch the tag objects that carry them, and without fetch-tags checkout
-      # creates a lightweight local tag pointing straight at the commit - on which
-      # %(contents) silently yields the commit message instead of the annotation.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -63,17 +56,20 @@ jobs:
       - name: Read the tag annotation
         id: notes
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ github.ref_name }}"
-          # Guard the lightweight-tag case explicitly: %(contents) falls back to the
-          # commit message there, which would put the whole commit body and its
-          # trailers into user-facing release notes without anything failing.
-          $type = (git cat-file -t $tag).Trim()
-          if ($type -ne 'tag') {
+          # Read the tag object from the API rather than from the checkout. On a tag push
+          # actions/checkout materialises the ref from the commit SHA, so the local tag is
+          # lightweight and carries no annotation at all - no fetch depth or fetch-tags
+          # setting changes that. The API always has the real object.
+          $ref = gh api "repos/${{ github.repository }}/git/ref/tags/$tag" | ConvertFrom-Json
+          if ($ref.object.type -ne 'tag') {
             Write-Host "::warning::Tag $tag is not annotated; release notes will be auto-generated only."
             $notes = ''
           } else {
-            $notes = (git tag -l --format='%(contents)' $tag) -join "`n"
+            $notes = (gh api "repos/${{ github.repository }}/git/tags/$($ref.object.sha)" --jq '.message') -join "`n"
           }
           "notes<<TAG_NOTES_EOF" >> $env:GITHUB_OUTPUT
           $notes >> $env:GITHUB_OUTPUT
