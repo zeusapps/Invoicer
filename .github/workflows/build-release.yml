@@ -29,11 +29,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      # Annotated tag messages become the release notes, and a shallow clone
-      # does not fetch the tag objects that carry them.
+      # Annotated tag messages become the release notes. A shallow clone does not
+      # fetch the tag objects that carry them, and without fetch-tags checkout
+      # creates a lightweight local tag pointing straight at the commit - on which
+      # %(contents) silently yields the commit message instead of the annotation.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -61,7 +64,17 @@ jobs:
         id: notes
         shell: pwsh
         run: |
-          $notes = (git tag -l --format='%(contents)' "${{ github.ref_name }}") -join "`n"
+          $tag = "${{ github.ref_name }}"
+          # Guard the lightweight-tag case explicitly: %(contents) falls back to the
+          # commit message there, which would put the whole commit body and its
+          # trailers into user-facing release notes without anything failing.
+          $type = (git cat-file -t $tag).Trim()
+          if ($type -ne 'tag') {
+            Write-Host "::warning::Tag $tag is not annotated; release notes will be auto-generated only."
+            $notes = ''
+          } else {
+            $notes = (git tag -l --format='%(contents)' $tag) -join "`n"
+          }
           "notes<<TAG_NOTES_EOF" >> $env:GITHUB_OUTPUT
           $notes >> $env:GITHUB_OUTPUT
           "TAG_NOTES_EOF" >> $env:GITHUB_OUTPUT
