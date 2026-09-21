@@ -97,6 +97,72 @@ public class UpdateInstallerTests
         });
     }
 
+    // A failure to start the new executable is not a failed install: the swap has already
+    // happened. Reporting it as a failure told the user "Invoicer is unchanged" about an
+    // executable that had just been replaced.
+    [Fact]
+    public void SwapAndLaunch_WhenLaunchFails_ReportsInstalledButNotRelaunched()
+    {
+        WithTempDir(dir =>
+        {
+            var current = Path.Combine(dir, "Invoicer.exe");
+            var replacement = Path.Combine(dir, "new", "Invoicer.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(replacement)!);
+            File.WriteAllBytes(current, FakeExecutable("old"));
+            File.WriteAllBytes(replacement, FakeExecutable("new"));
+
+            var result = UpdateInstaller.SwapAndLaunch(
+                current, replacement, _ => throw new InvalidOperationException("shell refused"));
+
+            Assert.True(result.Success);
+            Assert.False(result.Relaunched);
+            Assert.Equal("shell refused", result.Error);
+            // The whole point: the update really is installed.
+            Assert.Equal(FakeExecutable("new"), File.ReadAllBytes(current));
+        });
+    }
+
+    [Fact]
+    public void SwapAndLaunch_WhenLaunchSucceeds_ReportsRelaunched()
+    {
+        WithTempDir(dir =>
+        {
+            var current = Path.Combine(dir, "Invoicer.exe");
+            var replacement = Path.Combine(dir, "new", "Invoicer.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(replacement)!);
+            File.WriteAllBytes(current, FakeExecutable("old"));
+            File.WriteAllBytes(replacement, FakeExecutable("new"));
+
+            var launched = "";
+            var result = UpdateInstaller.SwapAndLaunch(current, replacement, path => launched = path);
+
+            Assert.True(result.Success);
+            Assert.True(result.Relaunched);
+            Assert.Equal("", result.Error);
+            Assert.Equal(current, launched);
+        });
+    }
+
+    [Fact]
+    public void SwapAndLaunch_WhenSwapFails_DoesNotLaunchAndReportsFailure()
+    {
+        WithTempDir(dir =>
+        {
+            var current = Path.Combine(dir, "Invoicer.exe");
+            File.WriteAllBytes(current, FakeExecutable("old"));
+
+            var launched = false;
+            var result = UpdateInstaller.SwapAndLaunch(
+                current, Path.Combine(dir, "missing.exe"), _ => launched = true);
+
+            Assert.False(result.Success);
+            Assert.False(result.Relaunched);
+            Assert.False(launched);
+            // Nothing was touched, so "Invoicer is unchanged" is accurate here.
+            Assert.Equal(FakeExecutable("old"), File.ReadAllBytes(current));
+        });
+    }
+
     [Fact]
     public void Extract_PullsTheExecutableFromTheArchive()
     {

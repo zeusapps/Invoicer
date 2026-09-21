@@ -5,10 +5,24 @@ namespace Invoicer.Update;
 
 public class InstallResult
 {
+    /// <summary>True once the new executable is in place, whether or not it could be started.</summary>
     public bool Success { get; init; }
+
+    /// <summary>True when the new executable was also started, so the caller should shut down.</summary>
+    public bool Relaunched { get; init; }
+
     public string Error { get; init; } = "";
 
-    public static InstallResult Ok() => new() { Success = true };
+    public static InstallResult Ok() => new() { Success = true, Relaunched = true };
+
+    /// <summary>
+    /// The update is installed but could not be started. This is not an install failure: the
+    /// new executable is on disk and runs on the next launch. Reporting it as a failure would
+    /// tell the user nothing changed when everything has.
+    /// </summary>
+    public static InstallResult InstalledNotRelaunched(string error) =>
+        new() { Success = true, Relaunched = false, Error = error };
+
     public static InstallResult Fail(string error) => new() { Success = false, Error = error };
 }
 
@@ -61,12 +75,7 @@ public static class UpdateInstaller
             if (!extraction.Success)
                 return extraction;
 
-            var swap = Swap(currentExecutable, extractedPath);
-            if (!swap.Success)
-                return swap;
-
-            Launch(currentExecutable);
-            return InstallResult.Ok();
+            return SwapAndLaunch(currentExecutable, extractedPath, Launch);
         }
         catch (Exception ex)
         {
@@ -159,6 +168,36 @@ public static class UpdateInstaller
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Puts the replacement in place and starts it.
+    ///
+    /// The launch is deliberately outside the caller's failure path: once the swap has
+    /// succeeded the update is installed, and a failure to start the new executable - a
+    /// scanner still holding the freshly written file, a shell policy, anything - says
+    /// nothing about whether the install worked. Treating it as an install failure told the
+    /// user "Invoicer is unchanged" about an executable that had just been replaced.
+    /// </summary>
+    internal static InstallResult SwapAndLaunch(
+        string currentExecutable,
+        string replacement,
+        Action<string> launch)
+    {
+        var swap = Swap(currentExecutable, replacement);
+        if (!swap.Success)
+            return swap;
+
+        try
+        {
+            launch(currentExecutable);
+        }
+        catch (Exception ex)
+        {
+            return InstallResult.InstalledNotRelaunched(ex.Message);
+        }
+
+        return InstallResult.Ok();
     }
 
     /// <summary>

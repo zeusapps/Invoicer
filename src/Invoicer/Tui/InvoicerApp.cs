@@ -208,7 +208,18 @@ public class InvoicerApp
 
         if (result.Success)
         {
-            // The new executable is already running; this instance steps aside.
+            // Installed, but this instance could not hand over to the new executable.
+            // Saying so beats reporting a failed update that has in fact been applied.
+            if (!result.Relaunched)
+            {
+                MessageBox.Query("Update Installed",
+                    $"{release.Name} is installed, but Invoicer could not start it automatically.\n\n"
+                    + $"{result.Error}\n\n"
+                    + "Close this window and start Invoicer again to use the new version.",
+                    "OK");
+            }
+
+            // The new executable is in place; this instance steps aside either way.
             Application.RequestStop();
             return;
         }
