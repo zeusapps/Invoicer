@@ -43,7 +43,10 @@ public static class UpdateDialog
             X = 0,
             Y = 4,
             Width = Dim.Fill(),
-            Height = Dim.Fill(1),
+            // Two rows, not one: a Terminal.Gui button occupies its face plus the shadow it
+            // casts below. Reserving only one row let this frame paint over the button faces,
+            // leaving a row of shadows with no readable labels.
+            Height = Dim.Fill(2),
         };
 
         // Release notes are Markdown; shown as-is rather than rendered.
