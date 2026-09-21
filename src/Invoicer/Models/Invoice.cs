@@ -17,6 +17,18 @@ public class Invoice
     public decimal GrossAmount { get; set; }
     public string Currency { get; set; } = "PLN";
 
+    /// <summary>
+    /// PLN per one unit of <see cref="Currency"/>, at the precision NBP published it.
+    /// Null for a PLN invoice, and for a foreign-currency invoice whose rate could not be resolved.
+    /// </summary>
+    public decimal? ExchangeRate { get; set; }
+
+    /// <summary>Effective date of the NBP table <see cref="ExchangeRate"/> came from, or null when it was entered by hand.</summary>
+    public DateTime? ExchangeRateDate { get; set; }
+
+    /// <summary>Identifier of that NBP table (for example <c>182/A/NBP/2026</c>), or null when the rate was entered by hand.</summary>
+    public string? ExchangeRateTable { get; set; }
+
     public string ServiceDescription { get; set; } = "";
     public string ServiceDescriptionUa { get; set; } = "";
 
@@ -40,7 +52,10 @@ public class Invoice
         decimal amount,
         bool generateDocx = true,
         bool generatePdf = true,
-        bool generateXml = false)
+        bool generateXml = false,
+        decimal? exchangeRate = null,
+        DateTime? exchangeRateDate = null,
+        string? exchangeRateTable = null)
     {
         var serviceMonth = CalculateServiceMonth(invoiceDate, client.MonthOffsetRule);
         var netAmount = amount;
@@ -66,6 +81,9 @@ public class Invoice
             VatAmount = vatAmount,
             GrossAmount = grossAmount,
             Currency = client.Currency,
+            ExchangeRate = exchangeRate,
+            ExchangeRateDate = exchangeRateDate,
+            ExchangeRateTable = exchangeRateTable,
             ServiceDescription = client.ServiceDescription,
             ServiceDescriptionUa = client.ServiceDescriptionUa,
             GenerateDocx = generateDocx,

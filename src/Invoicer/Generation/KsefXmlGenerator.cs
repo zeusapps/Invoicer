@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Xml;
+using Invoicer.Exchange;
 using Invoicer.Models;
 
 namespace Invoicer.Generation;
@@ -95,8 +96,57 @@ public static class KsefXmlGenerator
         if (string.IsNullOrWhiteSpace(invoice.BillingAccount.Iban))
             errors.Add($"Billing account '{invoice.BillingAccount.Key}' IBAN is required.");
 
+        errors.AddRange(ValidateCurrency(invoice));
+
         return errors;
     }
+
+    /// <summary>
+    /// The maximum fraction digits TIlosci can hold, which is what bounds KursWaluty. NBP
+    /// publishes some low-value currencies more precisely than this; such a rate is rejected
+    /// rather than rounded to fit, because rounding it is the very defect this field guards.
+    /// </summary>
+    internal const int MaxRateDecimals = 6;
+
+    private static IEnumerable<string> ValidateCurrency(Invoice invoice)
+    {
+        if (!ExchangeRateRules.RequiresRate(invoice.Currency))
+            yield break;
+
+        var currency = ExchangeRateRules.Normalize(invoice.Currency);
+
+        // FA(3) expects the tax fields of a foreign-currency invoice in PLN while the sales
+        // values stay in the invoice currency. That conversion is not implemented, so emitting
+        // the amounts unconverted would produce a schema-valid but factually wrong invoice.
+        if (Countries.Normalize(invoice.Client.Country) == Countries.Poland)
+        {
+            yield return $"A Polish client cannot be invoiced in a foreign currency ({currency}) for KSeF. "
+                         + "Convert the invoice to PLN, or set the client country to the buyer's country.";
+            yield break;
+        }
+
+        if (invoice.ExchangeRate is not { } rate)
+        {
+            yield return $"An exchange rate is required for a {currency} invoice.";
+            yield break;
+        }
+
+        if (rate <= 0)
+        {
+            yield return $"The exchange rate must be greater than zero, not {rate.ToString(CultureInfo.InvariantCulture)}.";
+            yield break;
+        }
+
+        // Whether the value survives six decimal places, not how many digits it was written
+        // with: 3.79980000 carries a scale of 8 but loses nothing, while 0.00021425 does.
+        if (decimal.Round(rate, MaxRateDecimals) != rate)
+        {
+            yield return $"The exchange rate {rate.ToString(CultureInfo.InvariantCulture)} has more than "
+                         + $"{MaxRateDecimals} decimal places, which KSeF cannot represent. "
+                         + "Rounding it would misstate the PLN taxable base.";
+        }
+    }
+
 
     private static void WriteHeader(XmlWriter writer, KsefHeader header)
     {
@@ -206,6 +256,11 @@ public static class KsefXmlGenerator
         writer.WriteElementString("P_9A", body.Line.UnitNetAmount.ToString("0.##", CultureInfo.InvariantCulture));
         writer.WriteElementString("P_11", body.Line.NetAmount.ToString("0.##", CultureInfo.InvariantCulture));
         writer.WriteElementString("P_12", body.TaxRate.RateCode);
+        // Last element of FaWiersz, after Procedura and before StanPrzed, per the FA(3) sequence.
+        // Written at the precision NBP published: "0.##" used for amounts would silently truncate
+        // a six-decimal rate, and a silently rounded rate misstates the PLN taxable base.
+        if (body.ExchangeRate is { } exchangeRate)
+            writer.WriteElementString("KursWaluty", exchangeRate.ToString("0.######", CultureInfo.InvariantCulture));
         writer.WriteEndElement();
 
         writer.WriteStartElement("Platnosc");
@@ -259,6 +314,9 @@ public static class KsefXmlGenerator
                     AddressLine1: NormalizeWhitespace(invoice.Client.Address)),
                 new KsefInvoiceBody(
                     CurrencyCode: invoice.Currency,
+                    // Read from the invoice, never looked up here: generation stays synchronous
+                    // and network-free so its output remains deterministic.
+                    ExchangeRate: ExchangeRateRules.RequiresRate(invoice.Currency) ? invoice.ExchangeRate : null,
                     InvoiceDate: invoice.InvoiceDate,
                     InvoiceNumber: invoice.FormattedNumber,
                     NetAmount: invoice.NetAmount,
@@ -306,6 +364,7 @@ public static class KsefXmlGenerator
 
     internal sealed record KsefInvoiceBody(
         string CurrencyCode,
+        decimal? ExchangeRate,
         DateTime InvoiceDate,
         string InvoiceNumber,
         decimal NetAmount,

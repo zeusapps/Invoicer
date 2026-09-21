@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using Invoicer.Config;
+using Invoicer.Exchange;
 using Invoicer.Generation;
 using Invoicer.Models;
 using Invoicer.Tui.Dialogs;
@@ -17,12 +18,37 @@ public class CreateInvoiceView : View
     private readonly TextField _dateField;
     private readonly TextField _amountField;
     private readonly Label _serviceMonthLabel;
+    private readonly Label _rateDateLabel;
+    private readonly TextField _rateDateField;
+    private readonly Label _rateLabel;
+    private readonly TextField _rateField;
+    private readonly Button _refreshRateButton;
+    private readonly Label _rateStatusLabel;
+    private readonly View[] _belowRateRows;
+    private readonly int[] _belowRateRowY;
     private readonly CheckBox _docxCheckBox;
     private readonly CheckBox _pdfCheckBox;
     private readonly CheckBox _xmlCheckBox;
     private readonly Label _previewLabel;
 
+    /// <summary>Rows the exchange rate block occupies, reclaimed when it is hidden.</summary>
+    private const int RateBlockHeight = 4;
+
+    // The last rate resolved from NBP, kept so a rate the user has since typed over is not
+    // attributed to a table it did not come from.
+    private decimal? _fetchedRate;
+    private DateTime? _fetchedRateDate;
+    private string? _fetchedRateTable;
+    private CancellationTokenSource? _rateLookup;
+
     private int SelectedClientIndex => _clientRadio.SelectedItem;
+
+    private ClientConfig? SelectedClient =>
+        SelectedClientIndex >= 0 && SelectedClientIndex < _enabledClients.Count
+            ? _enabledClients[SelectedClientIndex]
+            : null;
+
+    private bool NeedsRate => ExchangeRateRules.RequiresRate(SelectedClient?.Currency);
 
     public CreateInvoiceView(AppConfig config)
     {
@@ -117,6 +143,46 @@ public class CreateInvoiceView : View
         };
         row += 2;
 
+        // Exchange rate block. Shown only for a foreign-currency client; when hidden, the rows
+        // below move up so a PLN invoice sees no gap where it never applies.
+        _rateDateLabel = new Label { Text = "Rate Date:", X = 1, Y = row };
+        _rateDateField = new TextField
+        {
+            X = 18,
+            Y = row,
+            Width = 15,
+            ReadOnly = false,
+        };
+        row += 1;
+
+        _rateLabel = new Label { Text = "Exchange Rate:", X = 1, Y = row };
+        _rateField = new TextField
+        {
+            X = 18,
+            Y = row,
+            Width = 15,
+            ReadOnly = false,
+        };
+        _refreshRateButton = new Button { Text = "Refresh", X = 35, Y = row };
+        _refreshRateButton.Accepting += (_, e) =>
+        {
+            e.Cancel = true;
+            StartRateLookup();
+        };
+        row += 1;
+
+        _rateStatusLabel = new Label
+        {
+            X = 18,
+            Y = row,
+            Width = Dim.Fill(2),
+            Text = "",
+            HotKeySpecifier = (Rune)0xFFFF,
+        };
+        row += 2;
+
+        var formatRowY = row;
+
         // Output format checkboxes
         var formatLabel = new Label { Text = "Output Format:", X = 1, Y = row };
         _docxCheckBox = new CheckBox
@@ -155,12 +221,21 @@ public class CreateInvoiceView : View
             OnGenerate();
         };
 
+        _belowRateRows = [formatLabel, _docxCheckBox, _pdfCheckBox, _xmlCheckBox, generateButton];
+        _belowRateRowY =
+        [
+            formatRowY, formatRowY, formatRowY, formatRowY, formatRowY + 3,
+        ];
+
         formFrame.Add(
             clientLabel, _clientRadio,
             numberLabel, _invoiceNumberField,
             dateLabel, _dateField,
             amountLabel, _amountField,
             serviceMonthTitle, _serviceMonthLabel,
+            _rateDateLabel, _rateDateField,
+            _rateLabel, _rateField, _refreshRateButton,
+            _rateStatusLabel,
             formatLabel, _docxCheckBox, _pdfCheckBox, _xmlCheckBox,
             generateButton
         );
@@ -186,8 +261,21 @@ public class CreateInvoiceView : View
         _clientRadio.SelectedItemChanged += (_, _) => OnClientChanged();
         _invoiceNumberField.HasFocusChanged += (_, e) => { if (!e.NewValue) UpdatePreview(); };
         _amountField.HasFocusChanged += (_, e) => { if (!e.NewValue) UpdatePreview(); };
-        _dateField.HasFocusChanged += (_, e) => { if (!e.NewValue) { _serviceMonthLabel.Text = CalculateServiceMonthText(); UpdatePreview(); } };
+        _dateField.HasFocusChanged += (_, e) =>
+        {
+            if (e.NewValue)
+                return;
 
+            _serviceMonthLabel.Text = CalculateServiceMonthText();
+            // The rate date derives from the invoice date, so it follows it until edited.
+            ResetRateDateToDefault();
+            UpdatePreview();
+        };
+        _rateDateField.HasFocusChanged += (_, e) => { if (!e.NewValue) StartRateLookup(); };
+        _rateField.HasFocusChanged += (_, e) => { if (!e.NewValue) UpdatePreview(); };
+
+        ApplyRateVisibility();
+        ResetRateDateToDefault();
         UpdatePreview();
     }
 
@@ -210,7 +298,155 @@ public class CreateInvoiceView : View
         }
 
         _serviceMonthLabel.Text = CalculateServiceMonthText();
+        // A rate belongs to the currency it was resolved for, so it never survives a change of
+        // client. Clearing first also makes the lookup below unconditional: two clients can share
+        // a rate date while needing entirely different currencies.
+        ClearRate();
+        ApplyRateVisibility();
+        ResetRateDateToDefault();
         UpdatePreview();
+    }
+
+    /// <summary>
+    /// Shows the exchange rate rows only for a currency that needs one, and moves the rows
+    /// below up into the reclaimed space when it does not.
+    /// </summary>
+    private void ApplyRateVisibility()
+    {
+        var visible = NeedsRate;
+
+        _rateDateLabel.Visible = visible;
+        _rateDateField.Visible = visible;
+        _rateLabel.Visible = visible;
+        _rateField.Visible = visible;
+        _refreshRateButton.Visible = visible;
+        _rateStatusLabel.Visible = visible;
+
+        var offset = visible ? 0 : -RateBlockHeight;
+        for (var i = 0; i < _belowRateRows.Length; i++)
+            _belowRateRows[i].Y = _belowRateRowY[i] + offset;
+
+        if (!visible)
+            ClearRate();
+    }
+
+    private void ClearRate()
+    {
+        _rateLookup?.Cancel();
+        _rateField.Text = "";
+        _rateStatusLabel.Text = "";
+        _fetchedRate = null;
+        _fetchedRateDate = null;
+        _fetchedRateTable = null;
+    }
+
+    /// <summary>
+    /// Puts the derived relevant date back in the field and looks the rate up again. The derived
+    /// date is a starting point, not a verdict: the user may overwrite it.
+    /// </summary>
+    private void ResetRateDateToDefault()
+    {
+        if (!NeedsRate)
+            return;
+
+        var invoiceDate = ParseDate();
+        var serviceMonth = Invoice.CalculateServiceMonth(invoiceDate, SelectedClient!.MonthOffsetRule);
+        var relevantDate = ExchangeRateRules.RelevantDate(invoiceDate, serviceMonth);
+        var text = relevantDate.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture);
+
+        var dateChanged = _rateDateField.Text?.ToString() != text;
+        if (dateChanged)
+            _rateDateField.Text = text;
+
+        // Look the rate up again when the date moved, and also when there is simply no rate to
+        // show: switching from a PLN client back to a foreign-currency one clears the rate while
+        // leaving the date alone, and an early return there would strand the field empty.
+        if (dateChanged || _fetchedRate is null)
+            StartRateLookup();
+    }
+
+    private DateTime ParseRateDate()
+    {
+        var text = _rateDateField.Text?.ToString() ?? "";
+        return DateTime.TryParseExact(text, "dd.MM.yyyy", CultureInfo.InvariantCulture,
+            DateTimeStyles.None, out var date)
+            ? date
+            : ParseDate();
+    }
+
+    /// <summary>
+    /// Looks the rate up off the UI thread. Terminal.Gui views may only be touched from the UI
+    /// thread, so the result is applied through Application.Invoke.
+    /// </summary>
+    private void StartRateLookup()
+    {
+        if (!NeedsRate)
+            return;
+
+        _rateLookup?.Cancel();
+        var lookup = new CancellationTokenSource();
+        _rateLookup = lookup;
+
+        var currency = SelectedClient!.Currency;
+        var relevantDate = ParseRateDate();
+
+        _rateStatusLabel.Text = $"Looking up NBP rate for {ExchangeRateRules.Normalize(currency)}...";
+
+        _ = Task.Run(async () =>
+        {
+            var result = await NbpRateProvider.GetRateAsync(currency, relevantDate, lookup.Token);
+
+            Application.Invoke(() =>
+            {
+                // A newer lookup, or a switch to a PLN client, supersedes this one.
+                if (lookup.IsCancellationRequested || !ReferenceEquals(_rateLookup, lookup))
+                    return;
+
+                ApplyRateResult(result);
+            });
+        }, lookup.Token);
+    }
+
+    private void ApplyRateResult(NbpRateResult result)
+    {
+        if (result.Rate is { } rate)
+        {
+            _fetchedRate = rate.Rate;
+            _fetchedRateDate = rate.EffectiveDate;
+            _fetchedRateTable = rate.TableNumber;
+            _rateField.Text = rate.Rate.ToString("0.######", CultureInfo.InvariantCulture);
+            _rateStatusLabel.Text =
+                $"NBP {rate.TableNumber} of {rate.EffectiveDate:dd.MM.yyyy}";
+        }
+        else
+        {
+            // Nothing is guessed in: the field stays empty and the user can type the rate.
+            _fetchedRate = null;
+            _fetchedRateDate = null;
+            _fetchedRateTable = null;
+            _rateField.Text = "";
+            _rateStatusLabel.Text = result.Error ?? "The rate could not be retrieved.";
+        }
+
+        UpdatePreview();
+    }
+
+    /// <summary>
+    /// The rate to put on the invoice, together with the NBP table it came from. A rate the user
+    /// typed over the fetched one carries no table: it did not come from one.
+    /// </summary>
+    private (decimal? Rate, DateTime? Date, string? Table) ResolveRateForInvoice()
+    {
+        if (!NeedsRate)
+            return (null, null, null);
+
+        var text = (_rateField.Text?.ToString() ?? "").Trim();
+        if (!decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out var rate))
+            return (null, null, null);
+
+        return rate == _fetchedRate
+            ? (rate, _fetchedRateDate, _fetchedRateTable)
+            : (rate, null, null);
     }
 
     private void UpdatePreview()
@@ -243,6 +479,28 @@ public class CreateInvoiceView : View
         var account = _config.FindBillingAccount(client);
         var accountText = account is null ? "(none assigned)" : $"{account.Label} {account.Iban}";
 
+        var (rate, rateDate, rateTable) = ResolveRateForInvoice();
+        var rateBlock = "";
+        if (NeedsRate)
+        {
+            if (rate is { } value)
+            {
+                var source = rateTable is null
+                    ? "entered by hand"
+                    : $"NBP A {rateTable}, effective {rateDate:dd.MM.yyyy}";
+
+                rateBlock =
+                    "\n" +
+                    $"Rate:    {value.ToString("0.######", CultureInfo.InvariantCulture)} PLN/{ExchangeRateRules.Normalize(client.Currency)}\n" +
+                    $"         {source}\n" +
+                    $"Net PLN: {Math.Round(amount * value, 2).ToString("N2", CultureInfo.InvariantCulture)}\n";
+            }
+            else
+            {
+                rateBlock = "\nRate:    (not set - KSeF XML needs one)\n";
+            }
+        }
+
         _previewLabel.Text =
             $"Invoice: {formattedNum}\n" +
             $"Client:  {client.Name}\n" +
@@ -253,6 +511,7 @@ public class CreateInvoiceView : View
             $"Net:     {amount.ToString("N2", CultureInfo.InvariantCulture)} {client.Currency}\n" +
             $"VAT:     {(client.VatRate > 0 ? $"{vatAmount.ToString("N2", CultureInfo.InvariantCulture)} {client.Currency} ({client.VatRate}%)" : "N/A")}\n" +
             $"Gross:   {gross.ToString("N2", CultureInfo.InvariantCulture)} {client.Currency}\n" +
+            rateBlock +
             $"\n" +
             $"Output:  {outputDir}/\n" +
             $"File:    {filename}";
@@ -323,6 +582,8 @@ public class CreateInvoiceView : View
             return;
         }
 
+        var (exchangeRate, exchangeRateDate, exchangeRateTable) = ResolveRateForInvoice();
+
         var invoice = Invoice.Create(
             client,
             _config.Supplier,
@@ -333,7 +594,10 @@ public class CreateInvoiceView : View
             amount,
             generateDocx,
             generatePdf,
-            generateXml
+            generateXml,
+            exchangeRate,
+            exchangeRateDate,
+            exchangeRateTable
         );
 
         try
@@ -366,6 +630,7 @@ public class CreateInvoiceView : View
 
             // Update fields for next invoice
             _invoiceNumberField.Text = (invoiceNumber + 1).ToString();
+            ApplyRateVisibility();
             UpdatePreview();
         }
         catch (KsefValidationException ex)
