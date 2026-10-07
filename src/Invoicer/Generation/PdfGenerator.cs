@@ -25,6 +25,9 @@ public static class PdfGenerator
     }
 
     public static void Generate(Invoice invoice)
+        => GeneratePrepared(invoice, InvoicePreparation.Prepare(invoice));
+
+    internal static void GeneratePrepared(Invoice invoice, PreparedInvoiceTax prepared)
     {
         QuestPDF.Settings.License = LicenseType.Community;
         EnsureFontsRegistered();
@@ -37,7 +40,7 @@ public static class PdfGenerator
                 page.Size(PageSizes.A4);
                 page.MarginHorizontal(1.5f, Unit.Centimetre);
                 page.MarginVertical(1.5f, Unit.Centimetre);
-                page.DefaultTextStyle(x => x.FontSize(9));
+                page.DefaultTextStyle(x => x.FontFamily("Lato").FontSize(9));
 
                 page.Content().Column(col =>
                 {
@@ -69,13 +72,10 @@ public static class PdfGenerator
                             $"{invoice.ServiceDescription}\n{invoice.ServiceDescriptionUa}");
 
                         AddInfoRow(table, "Supplier / Постачальник:",
-                            $"{invoice.Supplier.Name} / {invoice.Supplier.NameUa}\n" +
-                            $"NIP/TIN: {invoice.Supplier.Tin}, REGON: {invoice.Supplier.Regon}\n" +
-                            $"VAT EU: {invoice.Supplier.Vat}\n" +
-                            $"{invoice.Supplier.Address}\n{invoice.Supplier.AddressUa}");
+                            InvoiceText.SupplierBlock(invoice, prepared));
 
                         AddInfoRow(table, "Customer / Замовник:",
-                            InvoiceText.CustomerBlock(invoice));
+                            InvoiceText.CustomerBlock(invoice, prepared));
 
                         AddInfoRow(table, "Bank account / Банківський рахунок:",
                             InvoiceText.BankAccountBlock(invoice));
@@ -92,10 +92,10 @@ public static class PdfGenerator
                     {
                         table.ColumnsDefinition(columns =>
                         {
-                            columns.ConstantColumn(30);   // No.
-                            columns.RelativeColumn(4);    // Description
+                            columns.ConstantColumn(40);   // No. and Ukrainian header
+                            columns.RelativeColumn(3);    // Description
                             columns.RelativeColumn(1.5f); // Net
-                            columns.RelativeColumn(1);    // VAT %
+                            columns.RelativeColumn(2);    // Tax treatment (wrap NP)
                             columns.RelativeColumn(1.2f); // VAT
                             columns.RelativeColumn(1.5f); // Gross
                         });
@@ -104,7 +104,7 @@ public static class PdfGenerator
                         AddServicesHeaderCell(table, "No.\nНомер");
                         AddServicesHeaderCell(table, "Description\nОпис");
                         AddServicesHeaderCell(table, "Net\nНетто");
-                        AddServicesHeaderCell(table, "VAT %\nПДВ %");
+                        AddServicesHeaderCell(table, "Tax treatment\nРежим ПДВ");
                         AddServicesHeaderCell(table, "VAT\nПДВ");
                         AddServicesHeaderCell(table, "Gross\nБрутто");
 
@@ -112,8 +112,8 @@ public static class PdfGenerator
                         AddServicesCell(table, "1");
                         AddServicesCell(table, $"{invoice.ServiceDescription}\n{invoice.ServiceDescriptionUa}");
                         AddServicesCell(table, FormatAmount(invoice.NetAmount, invoice.Currency));
-                        AddServicesCell(table, invoice.VatRate > 0 ? $"{invoice.VatRate}%" : "N/A");
-                        AddServicesCell(table, invoice.VatRate > 0 ? FormatAmount(invoice.VatAmount, invoice.Currency) : "N/A");
+                        AddServicesCell(table, InvoiceText.TaxLabel(prepared.Treatment));
+                        AddServicesCell(table, FormatAmount(prepared.Amounts.Vat, invoice.Currency));
                         AddServicesCell(table, FormatAmount(invoice.GrossAmount, invoice.Currency));
 
                         // Total row
@@ -121,13 +121,20 @@ public static class PdfGenerator
                         AddServicesTotalCell(table, "Total / Всього");
                         AddServicesTotalCell(table, FormatAmount(invoice.NetAmount, invoice.Currency));
                         AddServicesTotalCell(table, "");
-                        AddServicesTotalCell(table, invoice.VatRate > 0 ? FormatAmount(invoice.VatAmount, invoice.Currency) : "N/A");
+                        AddServicesTotalCell(table, FormatAmount(prepared.Amounts.Vat, invoice.Currency));
                         AddServicesTotalCell(table, FormatAmount(invoice.GrossAmount, invoice.Currency));
                     });
 
                     // Footer
                     col.Item().Column(footerCol =>
                     {
+                        if (prepared.Treatment.Kind != InvoiceTaxKind.Domestic)
+                            footerCol.Item().Text(InvoiceText.NpExplanationUa).Italic().FontSize(9);
+                        if (prepared.Treatment.ReverseCharge)
+                        {
+                            footerCol.Item().Text(InvoiceText.ReverseChargeAnnotation).Bold().FontSize(9);
+                            footerCol.Item().Text(InvoiceText.ReverseChargeExplanationUa).Italic().FontSize(9);
+                        }
                         footerCol.Item().Text(text =>
                         {
                             text.Span($"Total amount due: {FormatAmount(invoice.GrossAmount, invoice.Currency)}")

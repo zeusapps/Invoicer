@@ -464,11 +464,20 @@ public class CreateInvoiceView : View
         if (!decimal.TryParse(_amountField.Text?.ToString(), CultureInfo.InvariantCulture, out var amount))
             amount = client.DefaultAmount;
 
+        InvoiceTaxTreatment treatment;
+        try { treatment = InvoiceTaxTreatment.ForClient(client); }
+        catch (InvoiceValidationException ex)
+        {
+            _previewLabel.Text = ex.Message;
+            return;
+        }
+
         var date = ParseDate();
         var serviceMonth = Invoice.CalculateServiceMonth(date, client.MonthOffsetRule);
         var formattedNum = $"{date:yyyy}/{client.InvoicePrefix}/{invNum:D4}";
-        var vatAmount = Math.Round(amount * client.VatRate / 100m, 2);
-        var gross = amount + vatAmount;
+        var amounts = treatment.Calculate(amount);
+        var vatAmount = amounts.Vat;
+        var gross = amounts.Gross;
 
         var outputDir = _config.Output.Pattern
             .Replace("{year}", date.Year.ToString());
@@ -509,8 +518,10 @@ public class CreateInvoiceView : View
             $"Service: {serviceMonth:MMMM yyyy}\n" +
             $"\n" +
             $"Net:     {amount.ToString("N2", CultureInfo.InvariantCulture)} {client.Currency}\n" +
-            $"VAT:     {(client.VatRate > 0 ? $"{vatAmount.ToString("N2", CultureInfo.InvariantCulture)} {client.Currency} ({client.VatRate}%)" : "N/A")}\n" +
+            $"Tax:     {treatment.Label}\n" +
+            $"VAT:     {InvoiceText.FormatAmount(vatAmount, client.Currency)} ({InvoiceText.TaxLabel(treatment)})\n" +
             $"Gross:   {gross.ToString("N2", CultureInfo.InvariantCulture)} {client.Currency}\n" +
+            (treatment.ReverseCharge ? InvoiceText.ReverseChargeAnnotation + "\n" : "") +
             rateBlock +
             $"\n" +
             $"Output:  {outputDir}/\n" +
@@ -564,69 +575,16 @@ public class CreateInvoiceView : View
             return;
         }
 
-        _config.Output.GenerateDocxByDefault = generateDocx;
-        _config.Output.GeneratePdfByDefault = generatePdf;
-        _config.Output.GenerateXmlByDefault = generateXml;
-
         var client = _enabledClients[SelectedClientIndex];
-
-        // Resolved before any generator runs, so a bad account reference produces no files at all.
-        BillingAccountConfig billingAccount;
-        try
-        {
-            billingAccount = _config.ResolveBillingAccount(client);
-        }
-        catch (BillingAccountNotFoundException ex)
-        {
-            MessageBox.ErrorQuery("Billing Account Missing", ex.Message, "OK");
-            return;
-        }
-
         var (exchangeRate, exchangeRateDate, exchangeRateTable) = ResolveRateForInvoice();
 
-        var invoice = Invoice.Create(
-            client,
-            _config.Supplier,
-            billingAccount,
-            _config.Output,
-            invoiceNumber,
-            ParseDate(),
-            amount,
-            generateDocx,
-            generatePdf,
-            generateXml,
-            exchangeRate,
-            exchangeRateDate,
-            exchangeRateTable
-        );
-
         try
         {
-            var generatedFiles = new List<string>();
+            var (invoice, generatedFiles) = InvoiceGeneration.CreateAndGenerate(
+                _config, client, invoiceNumber, ParseDate(), amount, generateDocx, generatePdf, generateXml,
+                exchangeRate, exchangeRateDate, exchangeRateTable);
 
-            if (invoice.GenerateDocx)
-            {
-                DocxGenerator.Generate(invoice);
-                generatedFiles.Add(invoice.DocxPath);
-            }
-
-            if (invoice.GeneratePdf)
-            {
-                PdfGenerator.Generate(invoice);
-                generatedFiles.Add(invoice.PdfPath);
-            }
-
-            if (invoice.GenerateXml)
-            {
-                KsefXmlGenerator.Generate(invoice);
-                generatedFiles.Add(invoice.XmlPath);
-            }
-
-            // Update last invoice number
-            client.LastInvoiceNumber = invoiceNumber;
-            ConfigManager.Save(_config);
-
-            InvoiceResultDialog.Show(invoice.FormattedNumber, generatedFiles);
+            InvoiceResultDialog.Show(invoice.FormattedNumber, generatedFiles.ToList());
 
             // Update fields for next invoice
             _invoiceNumberField.Text = (invoiceNumber + 1).ToString();
@@ -637,6 +595,10 @@ public class CreateInvoiceView : View
         {
             var details = string.Join("\n", ex.Errors.Select(error => $"- {error}"));
             MessageBox.ErrorQuery("KSeF Validation Failed", details, "OK");
+        }
+        catch (InvoiceValidationException ex)
+        {
+            MessageBox.ErrorQuery("Invoice Validation Failed", ex.Message, "OK");
         }
         catch (Exception ex)
         {

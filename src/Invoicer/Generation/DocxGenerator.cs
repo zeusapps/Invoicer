@@ -8,6 +8,9 @@ namespace Invoicer.Generation;
 public static class DocxGenerator
 {
     public static void Generate(Invoice invoice)
+        => GeneratePrepared(invoice, InvoicePreparation.Prepare(invoice));
+
+    internal static void GeneratePrepared(Invoice invoice, PreparedInvoiceTax prepared)
     {
         Directory.CreateDirectory(invoice.OutputDirectory);
         using var doc = WordprocessingDocument.Create(invoice.DocxPath, WordprocessingDocumentType.Document);
@@ -28,17 +31,17 @@ public static class DocxGenerator
         body.AppendChild(new Paragraph());
 
         // Info table
-        AddInfoTable(body, invoice);
+        AddInfoTable(body, invoice, prepared);
 
         body.AppendChild(new Paragraph());
 
         // Services table
-        AddServicesTable(body, invoice);
+        AddServicesTable(body, invoice, prepared);
 
         body.AppendChild(new Paragraph());
 
         // Footer
-        AddFooter(body, invoice);
+        AddFooter(body, invoice, prepared);
 
         body.AppendChild(sectionProps);
     }
@@ -47,8 +50,8 @@ public static class DocxGenerator
     {
         var para = new Paragraph();
         var pProps = new ParagraphProperties(
-            new Justification { Val = JustificationValues.Center },
-            new SpacingBetweenLines { After = "0" }
+            new SpacingBetweenLines { After = "0" },
+            new Justification { Val = JustificationValues.Center }
         );
         para.AppendChild(pProps);
 
@@ -63,22 +66,22 @@ public static class DocxGenerator
 
         var paraUa = new Paragraph();
         var pPropsUa = new ParagraphProperties(
-            new Justification { Val = JustificationValues.Center },
-            new SpacingBetweenLines { After = "0" }
+            new SpacingBetweenLines { After = "0" },
+            new Justification { Val = JustificationValues.Center }
         );
         paraUa.AppendChild(pPropsUa);
         var runUa = new Run();
         runUa.AppendChild(new RunProperties(
             new Italic(),
-            new FontSize { Val = "22" },
-            new Color { Val = "666666" }
+            new Color { Val = "666666" },
+            new FontSize { Val = "22" }
         ));
         runUa.AppendChild(new Text(titleUa));
         paraUa.AppendChild(runUa);
         body.AppendChild(paraUa);
     }
 
-    private static void AddInfoTable(Body body, Invoice invoice)
+    private static void AddInfoTable(Body body, Invoice invoice, PreparedInvoiceTax prepared)
     {
         var table = CreateTable(2);
 
@@ -96,14 +99,11 @@ public static class DocxGenerator
 
         AddInfoRow(table,
             "Supplier / Постачальник:",
-            $"{invoice.Supplier.Name} / {invoice.Supplier.NameUa}\n" +
-            $"NIP/TIN: {invoice.Supplier.Tin}, REGON: {invoice.Supplier.Regon}\n" +
-            $"VAT EU: {invoice.Supplier.Vat}\n" +
-            $"{invoice.Supplier.Address}\n{invoice.Supplier.AddressUa}");
+            InvoiceText.SupplierBlock(invoice, prepared));
 
         AddInfoRow(table,
             "Customer / Замовник:",
-            InvoiceText.CustomerBlock(invoice));
+            InvoiceText.CustomerBlock(invoice, prepared));
 
         AddInfoRow(table,
             "Bank account / Банківський рахунок:",
@@ -120,16 +120,16 @@ public static class DocxGenerator
         body.AppendChild(table);
     }
 
-    private static void AddServicesTable(Body body, Invoice invoice)
+    private static void AddServicesTable(Body body, Invoice invoice, PreparedInvoiceTax prepared)
     {
         var table = CreateTable(6);
 
         // Header row
         var headerRow = new TableRow();
         AddCell(headerRow, "No.\nНомер", true, "600");
-        AddCell(headerRow, "Description / Опис", true, "4266");
+        AddCell(headerRow, "Description / Опис", true, "3266");
         AddCell(headerRow, "Net / Нетто", true, "1600");
-        AddCell(headerRow, "VAT % / ПДВ %", true, "1000");
+        AddCell(headerRow, "Tax treatment / Режим ПДВ", true, "2000");
         AddCell(headerRow, "VAT / ПДВ", true, "1400");
         AddCell(headerRow, "Gross / Брутто", true, "1600");
         table.AppendChild(headerRow);
@@ -137,28 +137,32 @@ public static class DocxGenerator
         // Service row
         var serviceRow = new TableRow();
         AddCell(serviceRow, "1", false, "600");
-        AddCell(serviceRow, $"{invoice.ServiceDescription}\n{invoice.ServiceDescriptionUa}", false, "4266");
+        AddCell(serviceRow, $"{invoice.ServiceDescription}\n{invoice.ServiceDescriptionUa}", false, "3266");
         AddCell(serviceRow, FormatAmount(invoice.NetAmount, invoice.Currency), false, "1600");
-        AddCell(serviceRow, invoice.VatRate > 0 ? $"{invoice.VatRate}%" : "N/A", false, "1000");
-        AddCell(serviceRow, invoice.VatRate > 0 ? FormatAmount(invoice.VatAmount, invoice.Currency) : "N/A", false, "1400");
+        AddCell(serviceRow, InvoiceText.TaxLabel(prepared.Treatment), false, "2000");
+        AddCell(serviceRow, FormatAmount(prepared.Amounts.Vat, invoice.Currency), false, "1400");
         AddCell(serviceRow, FormatAmount(invoice.GrossAmount, invoice.Currency), false, "1600");
         table.AppendChild(serviceRow);
 
         // Total row
         var totalRow = new TableRow();
         AddCell(totalRow, "", true, "600");
-        AddCell(totalRow, "Total / Всього", true, "4266");
+        AddCell(totalRow, "Total / Всього", true, "3266");
         AddCell(totalRow, FormatAmount(invoice.NetAmount, invoice.Currency), true, "1600");
-        AddCell(totalRow, "", true, "1000");
-        AddCell(totalRow, invoice.VatRate > 0 ? FormatAmount(invoice.VatAmount, invoice.Currency) : "N/A", true, "1400");
+        AddCell(totalRow, "", true, "2000");
+        AddCell(totalRow, FormatAmount(prepared.Amounts.Vat, invoice.Currency), true, "1400");
         AddCell(totalRow, FormatAmount(invoice.GrossAmount, invoice.Currency), true, "1600");
         table.AppendChild(totalRow);
 
         body.AppendChild(table);
     }
 
-    private static void AddFooter(Body body, Invoice invoice)
+    private static void AddFooter(Body body, Invoice invoice, PreparedInvoiceTax prepared)
     {
+        if (prepared.Treatment.Kind != InvoiceTaxKind.Domestic)
+            AddBilingualParagraph(body, InvoiceText.NpExplanationUa, null);
+        if (prepared.Treatment.ReverseCharge)
+            AddBilingualParagraph(body, InvoiceText.ReverseChargeAnnotation, InvoiceText.ReverseChargeExplanationUa);
         AddBilingualParagraph(body,
             $"Total amount due: {FormatAmount(invoice.GrossAmount, invoice.Currency)}",
             $"Загальна сума до оплати: {FormatAmount(invoice.GrossAmount, invoice.Currency)}");
@@ -197,8 +201,8 @@ public static class DocxGenerator
             var runUa = new Run();
             runUa.AppendChild(new RunProperties(
                 new Italic(),
-                new FontSize { Val = "18" },
-                new Color { Val = "666666" }
+                new Color { Val = "666666" },
+                new FontSize { Val = "18" }
             ));
             runUa.AppendChild(new Text(textUa));
             paraUa.AppendChild(runUa);
@@ -210,17 +214,20 @@ public static class DocxGenerator
     {
         var table = new Table();
         var tblProps = new TableProperties(
+            new TableWidth { Width = "10466", Type = TableWidthUnitValues.Dxa },
             new TableBorders(
                 new TopBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
-                new BottomBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
                 new LeftBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
+                new BottomBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
                 new RightBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
                 new InsideHorizontalBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
                 new InsideVerticalBorder { Val = BorderValues.Single, Size = 4, Color = "000000" }
             ),
-            new TableWidth { Width = "10466", Type = TableWidthUnitValues.Dxa }
+            new TableLayout { Type = TableLayoutValues.Fixed }
         );
         table.AppendChild(tblProps);
+        var widths = columns == 2 ? new[] { "3500", "6966" } : new[] { "600", "3266", "1600", "2000", "1400", "1600" };
+        table.AppendChild(new TableGrid(widths.Select(width => new GridColumn { Width = width })));
         return table;
     }
 
@@ -285,7 +292,7 @@ public static class DocxGenerator
             para.AppendChild(new ParagraphProperties(new SpacingBetweenLines { After = "0" }));
             var run = new Run();
             var runProps = new RunProperties(new FontSize { Val = "18" });
-            if (bold) runProps.AppendChild(new Bold());
+            if (bold) runProps.AddChild(new Bold(), true);
             run.AppendChild(runProps);
             run.AppendChild(new Text(line) { Space = SpaceProcessingModeValues.Preserve });
             para.AppendChild(run);

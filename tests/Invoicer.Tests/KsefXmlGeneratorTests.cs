@@ -206,7 +206,7 @@ public class KsefXmlGeneratorTests
 
         var ex = Assert.Throws<KsefValidationException>(() => KsefXmlGenerator.Generate(invoice));
 
-        Assert.Contains(expectedError, ex.Errors);
+        Assert.Contains(ex.Errors, e => e.Contains(expectedError));
         Assert.False(File.Exists(invoice.XmlPath));
     }
 
@@ -237,7 +237,7 @@ public class KsefXmlGeneratorTests
         Assert.Equal("2500", fa.Element(ns + "P_13_8")?.Value);
         Assert.DoesNotContain(fa.Elements(), e => e.Name.LocalName.StartsWith("P_14") || e.Name.LocalName == "P_13_1");
         Assert.Equal("2500", fa.Element(ns + "P_15")?.Value);
-        Assert.Equal("1", fa.Element(ns + "Adnotacje")?.Element(ns + "P_18")?.Value);
+        Assert.Equal("2", fa.Element(ns + "Adnotacje")?.Element(ns + "P_18")?.Value);
         Assert.Null(seller.Element(ns + "PrefiksPodatnika"));
         AssertSchemaValid(invoice);
     }
@@ -266,7 +266,9 @@ public class KsefXmlGeneratorTests
 
     [Theory]
     [InlineData(23, "P_13_1", "P_14_1")]
+    [InlineData(22, "P_13_1", "P_14_1")]
     [InlineData(8, "P_13_2", "P_14_2")]
+    [InlineData(7, "P_13_2", "P_14_2")]
     [InlineData(5, "P_13_3", "P_14_3")]
     public void Generate_CodesPolishClientWithNumericRate(int rate, string netField, string vatField)
     {
@@ -287,16 +289,18 @@ public class KsefXmlGeneratorTests
 
     [Theory]
     [InlineData("US", 23, "Client VAT rate must be 0 for clients outside Poland (country US), not 23%.")]
-    [InlineData("PL", 0, "Client VAT rate 0% is not supported for KSeF invoices to Polish clients (supported: 23, 22, 8, 7, 5).")]
+    [InlineData("PL", 0, "Client VAT rate 0% is not supported for Polish clients (supported: 23, 22, 8, 7, 5).")]
     public void Generate_RejectsVatRateInconsistentWithCountry(string country, int rate, string expectedError)
     {
-        var invoice = CreateInvoice("2026/EL/0901", new DateTime(2026, 5, 11), 1000m, rate);
+        var invoice = CreateInvoice("2026/EL/0901", new DateTime(2026, 5, 11), 1000m, 23);
+        invoice.Client.VatRate = rate;
+        invoice.VatRate = rate;
         invoice.Client.Country = country;
         invoice.Client.Vat = country == "PL" ? "PL9999999999" : "";
 
         var ex = Assert.Throws<KsefValidationException>(() => KsefXmlGenerator.Generate(invoice));
 
-        Assert.Contains(expectedError, ex.Errors);
+        Assert.Contains(ex.Errors, e => e.Contains(expectedError));
         Assert.False(File.Exists(invoice.XmlPath));
     }
 
@@ -519,7 +523,7 @@ public class KsefXmlGeneratorTests
             Name = "Sample Supplier Sp. z o.o.",
             Tin = "1111111111",
             Regon = "",
-            Vat = "",
+            Vat = "PL1111111111",
             Address = "1 Demo Avenue, 00-002 Warsaw, Poland",
         };
 

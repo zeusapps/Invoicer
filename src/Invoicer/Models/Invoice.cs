@@ -60,8 +60,9 @@ public class Invoice
         var serviceMonth = CalculateServiceMonth(invoiceDate, client.MonthOffsetRule);
         var netAmount = amount;
         var vatRate = client.VatRate;
-        var vatAmount = Math.Round(netAmount * vatRate / 100m, 2);
-        var grossAmount = netAmount + vatAmount;
+        var amounts = InvoiceTaxTreatment.ForClient(client).Calculate(netAmount);
+        var vatAmount = amounts.Vat;
+        var grossAmount = amounts.Gross;
 
         var formattedNumber = FormatInvoiceNumber(client.InvoicePrefix, invoiceNumber, invoiceDate);
         var outputDir = ResolveOutputDirectory(output, invoiceDate);

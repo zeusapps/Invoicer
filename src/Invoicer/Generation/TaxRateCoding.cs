@@ -24,33 +24,17 @@ internal sealed record TaxRateCoding(
     /// the MF FA(3) brochure: services to non-EU buyers are "np I" (P_13_8), art. 28b services to EU
     /// buyers are "np II" (P_13_9), and "oo" is reserved for domestic reverse charge.
     /// </summary>
-    public static (TaxRateCoding? Coding, string? Error) Resolve(string? country, int vatRate)
+    public static (TaxRateCoding? Coding, string? Error) Resolve(string? country, int vatRate, bool? reverseCharge = null)
     {
-        var countryCode = Countries.Normalize(country);
-
-        if (countryCode != Countries.Poland)
-        {
-            if (vatRate != 0)
-            {
-                return (null,
-                    $"Client VAT rate must be 0 for clients outside Poland (country {countryCode}), not {vatRate}%.");
-            }
-
-            return Countries.IsEu(countryCode)
-                ? (new TaxRateCoding("np II", 9, HasTaxAmount: false, ReverseCharge: true, SellerEuPrefix: Countries.Poland), null)
-                : (new TaxRateCoding("np I", 8, HasTaxAmount: false, ReverseCharge: true, SellerEuPrefix: null), null);
-        }
-
-        int? summaryIndex = vatRate switch
-        {
-            23 or 22 => 1,
-            8 or 7 => 2,
-            5 => 3,
-            _ => null,
-        };
-
-        return summaryIndex is { } index
-            ? (new TaxRateCoding(vatRate.ToString(CultureInfo.InvariantCulture), index, HasTaxAmount: true, ReverseCharge: false, SellerEuPrefix: null), null)
-            : (null, $"Client VAT rate {vatRate}% is not supported for KSeF invoices to Polish clients (supported: 23, 22, 8, 7, 5).");
+        var (treatment, error) = InvoiceTaxTreatment.Resolve(country, vatRate, reverseCharge);
+        return treatment is null ? (null, error) : (FromTreatment(treatment), null);
     }
+
+    public static TaxRateCoding FromTreatment(InvoiceTaxTreatment treatment) => treatment.Kind switch
+    {
+        InvoiceTaxKind.EuServices => new("np II", 9, false, true, Countries.Poland),
+        InvoiceTaxKind.NonEuServices => new("np I", 8, false, treatment.ReverseCharge, null),
+        _ => new(treatment.Rate.ToString(CultureInfo.InvariantCulture),
+            treatment.Rate switch { 23 or 22 => 1, 8 or 7 => 2, _ => 3 }, true, false, null),
+    };
 }

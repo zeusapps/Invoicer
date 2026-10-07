@@ -5,7 +5,7 @@ using Xunit;
 
 namespace Invoicer.Tests;
 
-public class ConfigManagerTests
+public partial class ConfigManagerTests
 {
     [Fact]
     public void SaveAndLoad_RoundTripsXmlDefaultOutputFlag()

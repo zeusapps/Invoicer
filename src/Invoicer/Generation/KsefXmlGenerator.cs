@@ -26,7 +26,12 @@ public static class KsefXmlGenerator
             throw new KsefValidationException(errors);
         }
 
-        var document = KsefInvoiceDocument.FromInvoice(invoice, timeProvider ?? TimeProvider.System);
+        GeneratePrepared(invoice, InvoicePreparation.Prepare(invoice), timeProvider);
+    }
+
+    internal static void GeneratePrepared(Invoice invoice, PreparedInvoiceTax prepared, TimeProvider? timeProvider = null)
+    {
+        var document = KsefInvoiceDocument.FromInvoice(invoice, prepared, timeProvider ?? TimeProvider.System);
 
         Directory.CreateDirectory(invoice.OutputDirectory);
 
@@ -80,18 +85,11 @@ public static class KsefXmlGenerator
         if (string.IsNullOrWhiteSpace(invoice.Client.Address))
             errors.Add("Client address is required.");
 
-        var (_, identificationError) = BuyerIdentification.Resolve(invoice.Client.Country, invoice.Client.Vat);
-        if (identificationError is not null)
+        try
         {
-            errors.Add(identificationError);
+            InvoicePreparation.Prepare(invoice);
         }
-        else
-        {
-            // Only meaningful once the country is known to be valid.
-            var (_, rateError) = TaxRateCoding.Resolve(invoice.Client.Country, invoice.VatRate);
-            if (rateError is not null)
-                errors.Add(rateError);
-        }
+        catch (InvoiceValidationException ex) { errors.AddRange(ex.Errors); }
 
         if (string.IsNullOrWhiteSpace(invoice.BillingAccount.Iban))
             errors.Add($"Billing account '{invoice.BillingAccount.Key}' IBAN is required.");
@@ -279,16 +277,10 @@ public static class KsefXmlGenerator
 
     internal sealed record KsefInvoiceDocument(KsefHeader Header, KsefParty Seller, KsefParty Buyer, KsefInvoiceBody Body)
     {
-        public static KsefInvoiceDocument FromInvoice(Invoice invoice, TimeProvider timeProvider)
+        public static KsefInvoiceDocument FromInvoice(Invoice invoice, PreparedInvoiceTax prepared, TimeProvider timeProvider)
         {
-            var (buyerIdentification, identificationError) =
-                BuyerIdentification.Resolve(invoice.Client.Country, invoice.Client.Vat);
-            if (buyerIdentification is null)
-                throw new InvalidOperationException(identificationError);
-
-            var (taxRate, rateError) = TaxRateCoding.Resolve(invoice.Client.Country, invoice.VatRate);
-            if (taxRate is null)
-                throw new InvalidOperationException(rateError);
+            var buyerIdentification = prepared.Buyer;
+            var taxRate = TaxRateCoding.FromTreatment(prepared.Treatment);
 
             return new KsefInvoiceDocument(
                 new KsefHeader(
@@ -302,7 +294,7 @@ public static class KsefXmlGenerator
                     Metadata.SystemInfo),
                 new KsefParty(
                     EuVatPrefix: taxRate.SellerEuPrefix,
-                    Identification: new BuyerIdentification.Nip(invoice.Supplier.Tin),
+                    Identification: new BuyerIdentification.Nip(prepared.SellerNip),
                     Name: invoice.Supplier.Name,
                     AddressCountryCode: Countries.Poland,
                     AddressLine1: NormalizeWhitespace(invoice.Supplier.Address)),
@@ -319,9 +311,9 @@ public static class KsefXmlGenerator
                     ExchangeRate: ExchangeRateRules.RequiresRate(invoice.Currency) ? invoice.ExchangeRate : null,
                     InvoiceDate: invoice.InvoiceDate,
                     InvoiceNumber: invoice.FormattedNumber,
-                    NetAmount: invoice.NetAmount,
-                    VatAmount: invoice.VatAmount,
-                    GrossAmount: invoice.GrossAmount,
+                    NetAmount: prepared.Amounts.Net,
+                    VatAmount: prepared.Amounts.Vat,
+                    GrossAmount: prepared.Amounts.Gross,
                     TaxRate: taxRate,
                     Line: new KsefInvoiceLine(
                         Description: invoice.ServiceDescription,

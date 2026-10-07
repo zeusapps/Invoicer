@@ -6,16 +6,18 @@ namespace Invoicer.Tests;
 public class TaxRateCodingTests
 {
     [Theory]
-    [InlineData("US", "np I", 8, null)]
-    [InlineData("GB", "np I", 8, null)]
-    [InlineData("DE", "np II", 9, "PL")]
-    [InlineData("gr", "np II", 9, "PL")]
-    public void ForeignClient_IsNotTaxedInPoland_AndReverseCharged(string country, string code, int index, string? prefix)
+    [InlineData("US", "np I", 8, null, null, false)]
+    [InlineData("US", "np I", 8, null, true, true)]
+    [InlineData("GB", "np I", 8, null, false, false)]
+    [InlineData("GB", "np I", 8, null, true, true)]
+    [InlineData("DE", "np II", 9, "PL", null, true)]
+    [InlineData("gr", "np II", 9, "PL", null, true)]
+    public void ForeignClient_IsNotTaxedInPoland_WithIndependentReverseCharge(string country, string code, int index, string? prefix, bool? choice, bool reverse)
     {
-        var (coding, error) = TaxRateCoding.Resolve(country, 0);
+        var (coding, error) = TaxRateCoding.Resolve(country, 0, choice);
 
         Assert.Null(error);
-        Assert.Equal(new TaxRateCoding(code, index, HasTaxAmount: false, ReverseCharge: true, SellerEuPrefix: prefix), coding);
+        Assert.Equal(new TaxRateCoding(code, index, HasTaxAmount: false, ReverseCharge: reverse, SellerEuPrefix: prefix), coding);
     }
 
     [Theory]
@@ -50,6 +52,6 @@ public class TaxRateCodingTests
         var (coding, error) = TaxRateCoding.Resolve("PL", rate);
 
         Assert.Null(coding);
-        Assert.Equal($"Client VAT rate {rate}% is not supported for KSeF invoices to Polish clients (supported: 23, 22, 8, 7, 5).", error);
+        Assert.Equal($"Client VAT rate {rate}% is not supported for Polish clients (supported: 23, 22, 8, 7, 5).", error);
     }
 }

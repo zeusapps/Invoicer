@@ -17,6 +17,12 @@ public class ClientListView : View
     private readonly Button _toggleEnabledButton;
     private readonly Label _accountLabel;
     private readonly Label _accountWarningLabel;
+    private readonly Label _taxTreatmentLabel;
+    private readonly RadioGroup _reverseChargeRadio;
+    private readonly Label _reverseChargeHelp;
+    private bool _loadingFields;
+    private string _editedCountry = "";
+    private bool? _editedReverseCharge;
     private string _selectedAccountKey = "";
     private readonly string[] _monthRuleValues = ["early_previous", "early_current"];
     private readonly string[] _fieldLabels =
@@ -112,6 +118,31 @@ public class ClientListView : View
         };
         detailFrame.Add(_monthRuleRadio);
 
+        _taxTreatmentLabel = new Label
+        {
+            X = 1, Y = radioY + 3, Width = Dim.Fill(2), Height = Dim.Auto(DimAutoStyle.Text),
+        };
+        _reverseChargeRadio = new RadioGroup
+        {
+            X = 16, Y = Pos.Bottom(_taxTreatmentLabel) + 1,
+            RadioLabels = ["Unresolved", "No reverse charge", "Yes - reverse charge"],
+        };
+        _reverseChargeHelp = new Label
+        {
+            X = 1, Y = Pos.Bottom(_reverseChargeRadio) + 1, Width = Dim.Fill(2),
+            Height = Dim.Auto(DimAutoStyle.Text),
+            Text = "Reverse charge means the customer accounts for tax and the invoice carries that wording. It adds no Polish VAT.",
+        };
+        detailFrame.Add(_taxTreatmentLabel, _reverseChargeRadio, _reverseChargeHelp);
+        _fields[5].TextChanged += (_, _) => { if (!_loadingFields) RefreshTaxTreatment(countryEdited: true); };
+        _fields[9].TextChanged += (_, _) => { if (!_loadingFields) RefreshTaxTreatment(); };
+        _reverseChargeRadio.SelectedItemChanged += (_, _) =>
+        {
+            if (_loadingFields) return;
+            _editedReverseCharge = _reverseChargeRadio.SelectedItem switch { 1 => false, 2 => true, _ => null };
+            RefreshTaxTreatment();
+        };
+
         Scrolling.EnableVertical(detailFrame);
         Scrolling.ShowScrollBarWhenNeeded(_listView);
 
@@ -165,6 +196,7 @@ public class ClientListView : View
         client.Address = _fields[3].Text?.ToString() ?? "";
         client.AddressUa = _fields[4].Text?.ToString() ?? "";
         client.Country = Countries.Normalize(_fields[5].Text?.ToString());
+        client.ReverseCharge = _editedReverseCharge;
         client.Currency = _fields[6].Text?.ToString() ?? "";
         if (decimal.TryParse(_fields[7].Text?.ToString(), CultureInfo.InvariantCulture, out var amt)) client.DefaultAmount = amt;
         client.Vat = _fields[8].Text?.ToString() ?? "";
@@ -187,6 +219,9 @@ public class ClientListView : View
         if (idx < 0 || idx >= _config.Clients.Count) return;
 
         var client = _config.Clients[idx];
+        _loadingFields = true;
+        _editedCountry = Countries.Normalize(client.Country);
+        _editedReverseCharge = client.ReverseCharge;
         _fields[0].Text = client.Key;
         _fields[1].Text = client.Name;
         _fields[2].Text = client.NameUa;
@@ -204,7 +239,33 @@ public class ClientListView : View
         UpdateAccountDisplay();
         var ruleIndex = Array.IndexOf(_monthRuleValues, client.MonthOffsetRule);
         _monthRuleRadio.SelectedItem = ruleIndex >= 0 ? ruleIndex : 0;
+        _loadingFields = false;
+        RefreshTaxTreatment();
     }
+
+    private void RefreshTaxTreatment(bool countryEdited = false)
+    {
+        var country = Countries.Normalize(_fields[5].Text?.ToString());
+        if (countryEdited && TaxCategory(country) != TaxCategory(_editedCountry))
+            _editedReverseCharge = null;
+        _editedCountry = country;
+        var nonEu = Countries.IsKnown(country) && !Countries.IsEu(country);
+        _reverseChargeRadio.Visible = nonEu;
+        _reverseChargeHelp.Visible = nonEu;
+        _loadingFields = true;
+        var choice = InvoiceTaxTreatment.EffectiveChoice(country, _editedReverseCharge);
+        _reverseChargeRadio.SelectedItem = choice switch { false => 1, true => 2, _ => 0 };
+        _loadingFields = false;
+        if (!int.TryParse(_fields[9].Text?.ToString(), out var rate))
+        {
+            _taxTreatmentLabel.Text = "VAT rate must be an integer.";
+            return;
+        }
+        var (treatment, error) = InvoiceTaxTreatment.Resolve(country, rate, _editedReverseCharge);
+        _taxTreatmentLabel.Text = error ?? treatment!.Label;
+    }
+
+    private static int TaxCategory(string country) => country == "PL" ? 1 : Countries.IsEu(country) ? 2 : Countries.IsKnown(country) ? 3 : 0;
 
     private void UpdateAccountDisplay()
     {

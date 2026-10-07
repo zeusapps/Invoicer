@@ -127,6 +127,7 @@ public static class ConfigManager
                     BillingAccount = GetString(clientTable, "billing_account"),
                     Currency = GetString(clientTable, "currency", "PLN"),
                     VatRate = GetInt(clientTable, "vat_rate"),
+                    ReverseCharge = GetReverseCharge(clientTable),
                     ServiceDescription = GetString(clientTable, "service_description"),
                     ServiceDescriptionUa = GetString(clientTable, "service_description_ua"),
                     InvoicePrefix = GetString(clientTable, "invoice_prefix"),
@@ -140,6 +141,8 @@ public static class ConfigManager
 
         MigrateLegacyBillingAccount(config, supplierTable);
         InferMissingClientCountries(config);
+        foreach (var client in config.Clients)
+            client.ReverseCharge = InvoiceTaxTreatment.EffectiveChoice(client.Country, client.ReverseCharge);
 
         return config;
     }
@@ -244,6 +247,8 @@ public static class ConfigManager
             WriteString(sb, "billing_account", client.BillingAccount);
             WriteString(sb, "currency", client.Currency);
             sb.AppendLine($"vat_rate = {client.VatRate}");
+            if (InvoiceTaxTreatment.EffectiveChoice(client.Country, client.ReverseCharge) is { } reverseCharge)
+                sb.AppendLine($"reverse_charge = {(reverseCharge ? "true" : "false")}");
             WriteString(sb, "service_description", client.ServiceDescription);
             WriteString(sb, "service_description_ua", client.ServiceDescriptionUa);
             WriteString(sb, "invoice_prefix", client.InvoicePrefix);
@@ -285,6 +290,13 @@ public static class ConfigManager
             if (int.TryParse(val?.ToString(), out var parsed)) return parsed;
         }
         return defaultValue;
+    }
+
+    private static bool? GetReverseCharge(TomlTable table)
+    {
+        if (!table.TryGetValue("reverse_charge", out var value)) return null;
+        return value is bool choice ? choice : throw new FormatException(
+            $"Client '{GetString(table, "key")}': reverse_charge must be a TOML boolean (true or false).");
     }
 
     private static bool GetBool(TomlTable table, string key, bool defaultValue = false)

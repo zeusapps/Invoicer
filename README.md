@@ -2,7 +2,7 @@
 
 A terminal-based bilingual (English/Ukrainian) invoice generator for freelancers and contractors.
 
-![Screenshot](docs/screenshots/create_invoice.png)
+![Estonian invoice preview with EU reverse charge and all three output formats](docs/screenshots/create_invoice.png)
 
 ## Features
 
@@ -16,13 +16,19 @@ A terminal-based bilingual (English/Ukrainian) invoice generator for freelancers
 
 ## Screenshots
 
-|                     Create Invoice                     |                 Generated PDF                  |
-| :----------------------------------------------------: | :--------------------------------------------: |
-| ![Create Invoice](docs/screenshots/create_invoice.png) | ![PDF Output](docs/screenshots/pdf_output.png) |
+The current screens use the fictional Poland, Estonia and US configuration shown below. Estonia shows EU reverse charge; the US example shows services outside Polish VAT without reverse charge. Click an image to view it at full size.
 
-|            Client Management             |                  Settings                  |
-| :--------------------------------------: | :----------------------------------------: |
-| ![Clients](docs/screenshots/clients.png) | ![Settings](docs/screenshots/settings.png) |
+| Estonia: EU reverse-charge preview | US: outside Polish VAT preview |
+| :---: | :---: |
+| [![Estonian invoice preview with NP, zero Polish VAT and reverse-charge wording](docs/screenshots/create_invoice.png)](docs/screenshots/create_invoice.png) | [![US invoice preview with NP, zero Polish VAT and no reverse-charge wording](docs/screenshots/create_invoice_us.png)](docs/screenshots/create_invoice_us.png) |
+
+| Estonian client: derived reverse charge | US client: configurable reverse charge |
+| :---: | :---: |
+| [![Estonian client editor with country EE, VAT rate zero and EU B2B reverse charge](docs/screenshots/clients_estonia.png)](docs/screenshots/clients_estonia.png) | [![US client editor showing the reverse-charge choices and their explanation](docs/screenshots/clients.png)](docs/screenshots/clients.png) |
+
+| Generated Estonian invoice (PDF) | Supplier settings |
+| :---: | :---: |
+| [![Bilingual Estonian invoice with NP, zero VAT and the reverse-charge annotation](docs/screenshots/pdf_output.png)](docs/screenshots/pdf_output.png) | [![Supplier settings with consistent Polish NIP and EU VAT identifiers](docs/screenshots/settings.png)](docs/screenshots/settings.png) |
 
 ## Getting Started
 
@@ -118,7 +124,10 @@ Each `[[clients]]` entry defines a client with:
 | `address` / `address_ua`                         | Address in English / Ukrainian        |
 | `vat`                                            | Client VAT number                     |
 | `currency`                                       | Invoice currency (`PLN`, `USD`, etc.) |
-| `vat_rate`                                       | VAT percentage (0 for VAT-exempt)     |
+| `country`                                        | Required country code (`PL`, `EE`, `US`) |
+| `billing_account`                                | Key of a defined billing account      |
+| `vat_rate`                                       | Domestic rate; 0 means no Polish VAT for supported foreign services |
+| `reverse_charge`                                 | Non-EU buyer tax accounting choice (`true`/`false`) |
 | `service_description` / `service_description_ua` | Service line item text                |
 | `invoice_prefix`                                 | Prefix for invoice numbering          |
 | `default_amount`                                 | Pre-filled net amount                 |
@@ -128,6 +137,125 @@ Each `[[clients]]` entry defines a client with:
 
 - `early_previous` — days 1-20: previous month, days 21-31: current month
 - `early_current` — days 1-20: current month, days 21-31: next month
+
+### Poland, Estonia and US service contracts
+
+These treatments support ordinary B2B services supplied by a Polish business. Establish the applicable service rule and the customer's EU VAT registration outside the application, including VIES verification when applicable. Identifier checks validate syntax and consistency, rather than live registration.
+
+| Contract | Settings | Invoice | FA(3) XML |
+| --- | --- | --- | --- |
+| Poland | `country = "PL"`, `vat_rate = 23` | Polish VAT 23%; no reverse charge | `P_12=23`, `P_13_1`/`P_14_1`, `P_18=2` |
+| Estonia | `country = "EE"`, `vat_rate = 0` | NP; customer accounts for VAT; reverse-charge wording | `np II`, `P_13_9`, `P_18=1`, seller prefix `PL` |
+| US contract | `country = "US"`, `vat_rate = 0`, `reverse_charge = false` | NP; no Polish VAT or reverse-charge wording | `np I`, `P_13_8`, `P_18=2` |
+
+`vat_rate = 0` for foreign services is an internal value meaning no Polish VAT is charged. Documents show `NP - not subject to Polish VAT` and a zero monetary VAT amount. It does not represent a domestic zero-rated or exempt sale. When reverse charge applies, documents also show `Reverse charge / odwrotne obciążenie` with a Ukrainian explanation. The buyer accounts for its local tax; no Estonian tax percentage is added to the amount payable.
+
+Missing US choices default to false and the next save writes `reverse_charge = false`. Explicit true/false values are preserved. Other non-EU clients require an explicit choice before generation; unresolved drafts can still be saved. Enabling non-EU reverse charge changes the wording and `P_18` to 1 while preserving NP classification and all amounts. Determine that choice from the actual contract/tax circumstances; this application does not calculate US sales/use tax. Poland derives false and other EU clients derive true; contradictory overrides are rejected. Supported domestic rates are 23, 22, 8, 7 and 5.
+
+Upgrading changes the prior automatic US `P_18=1` to `P_18=2` unless explicitly overridden. Keep the former Polish client separately when adding an Estonian client if historical regeneration is needed. Every format now requires a seller NIP and valid Polish/EU buyer identification. Estonia also requires the supplier's EU VAT number to equal `PL` plus its NIP. Stored EU buyer numbers may omit their prefix; documents display the normalized complete identifier. Empty non-EU identification remains allowed.
+
+All selected outputs are validated before creating directories or replacing files. Failed validation preserves numbering and output preferences. Foreign-currency XML needs a positive exchange rate with at most six meaningful decimal places; a missing NBP rate leaves PDF/DOCX available by deselecting XML. XML for a Polish client in a foreign currency remains unsupported, while documents alone remain available.
+
+XML export does not issue an accepted KSeF invoice. Submission, UPO/acceptance checks, KSeF numbers and recipient visualization/QR requirements remain the responsibility of the external issuance workflow. This change does not submit invoices, rewrite past invoices, or cover goods, special service rules, domestic zero-rated/exempt sales or corrections.
+
+The complete example below uses fictional format-valid identities and account details. Replace them with actual verified party and payment details before operational use. Each contract has a separate client entry and its own numbering.
+
+<!-- tax-treatment-sample-start -->
+```toml
+[supplier]
+name = "Example Polish Supplier"
+name_ua = "Тестовий польський постачальник"
+tin = "1111111111"
+vat = "PL1111111111"
+regon = ""
+address = "1 Example Street, 00-001 Warsaw, Poland"
+address_ua = "Тестова адреса, Варшава, Польща"
+
+[[billing_accounts]]
+key = "SAMPLE"
+label = "Fictional sample account"
+iban = "PL00102010260000004270201111"
+bank = "Example Bank"
+swift = ""
+currency = ""
+
+[output]
+directory = "./output/tax-treatment-samples"
+pattern = "{year}/Invoices"
+filename = "{date}_{client}"
+generate_docx_by_default = true
+generate_pdf_by_default = true
+generate_xml_by_default = true
+
+[[clients]]
+key = "POLAND"
+name = "Example Polish Buyer"
+name_ua = "Тестовий польський замовник"
+address = "2 Example Street, 00-001 Warsaw, Poland"
+address_ua = "Тестова адреса, Варшава, Польща"
+country = "PL"
+vat = "PL9999999999"
+billing_account = "SAMPLE"
+currency = "PLN"
+vat_rate = 23
+service_description = "B2B IT services"
+service_description_ua = "ІТ-послуги для бізнесу"
+invoice_prefix = "PL"
+default_amount = 1000.00
+month_offset_rule = "early_previous"
+last_invoice_number = 0
+enabled = true
+
+[[clients]]
+key = "ESTONIA"
+name = "Example Estonian Buyer"
+name_ua = "Тестовий естонський замовник"
+address = "3 Example Street, Tallinn, Estonia"
+address_ua = "Тестова адреса, Таллінн, Естонія"
+country = "EE"
+vat = "EE123456789"
+billing_account = "SAMPLE"
+currency = "EUR"
+vat_rate = 0
+service_description = "B2B IT services"
+service_description_ua = "ІТ-послуги для бізнесу"
+invoice_prefix = "EE"
+default_amount = 1000.00
+month_offset_rule = "early_previous"
+last_invoice_number = 0
+enabled = true
+
+[[clients]]
+key = "USA"
+name = "Example US Buyer"
+name_ua = "Тестовий замовник зі США"
+address = "4 Example Street, Boston, USA"
+address_ua = "Тестова адреса, Бостон, США"
+country = "US"
+vat = ""
+billing_account = "SAMPLE"
+currency = "USD"
+vat_rate = 0
+reverse_charge = false
+service_description = "B2B IT services"
+service_description_ua = "ІТ-послуги для бізнесу"
+invoice_prefix = "US"
+default_amount = 1000.00
+month_offset_rule = "early_previous"
+last_invoice_number = 0
+enabled = true
+```
+<!-- tax-treatment-sample-end -->
+
+Generate the fictional sample matrix and validate each XML locally with:
+
+```powershell
+$env:INVOICER_SAMPLE_DIRECTORY = Join-Path (Get-Location) 'output/tax-treatment-samples'
+dotnet test tests/Invoicer.Tests/Invoicer.Tests.csproj --filter FullyQualifiedName~GenerateDocumentSamples
+Remove-Item Env:INVOICER_SAMPLE_DIRECTORY
+```
+
+This uses invoice date 2026-10-07, number 1, net 1000, a fixed XML clock and illustrative manually supplied rates (EUR 4.25, USD 3.7998). These rates are fictional verification inputs. It also produces `USA_RC`, a separate US sample with reverse charge explicitly enabled. The test reads the sample above into an isolated config, without saving operational settings or contacting NBP/KSeF.
 
 ## Tech Stack
 

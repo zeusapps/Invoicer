@@ -12,6 +12,7 @@ public class ClientConfig
     public string BillingAccount { get; set; } = "";
     public string Currency { get; set; } = "PLN";
     public int VatRate { get; set; }
+    public bool? ReverseCharge { get; set; }
     public string ServiceDescription { get; set; } = "";
     public string ServiceDescriptionUa { get; set; } = "";
     public string InvoicePrefix { get; set; } = "";

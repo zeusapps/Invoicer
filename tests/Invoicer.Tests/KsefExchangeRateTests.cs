@@ -254,6 +254,7 @@ public class KsefExchangeRateTests
             BillingAccount = "MAIN",
             Currency = currency,
             VatRate = vatRate,
+            ReverseCharge = !Countries.IsEu(country) ? false : null,
             ServiceDescription = "Software development services",
             InvoicePrefix = "EL",
             DefaultAmount = 5000m,
@@ -266,7 +267,7 @@ public class KsefExchangeRateTests
             Name = "Sample Supplier Sp. z o.o.",
             Tin = "1111111111",
             Regon = "",
-            Vat = "",
+            Vat = "PL1111111111",
             Address = "1 Demo Avenue, 00-002 Warsaw, Poland",
         };
 
