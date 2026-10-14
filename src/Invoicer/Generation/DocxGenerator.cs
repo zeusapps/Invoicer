@@ -91,7 +91,7 @@ public static class DocxGenerator
 
         AddInfoRow(table,
             "Service period / Період надання послуг:",
-            $"{new DateTime(invoice.ServiceMonth.Year, invoice.ServiceMonth.Month, 1):MMMM yyyy}");
+            InvoiceText.ServicePeriodText(prepared.ServicePeriod));
 
         AddInfoRow(table,
             "Service / Послуга:",

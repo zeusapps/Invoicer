@@ -42,10 +42,13 @@ public static class ExchangeRateRules
             serviceMonth.Month,
             DateTime.DaysInMonth(serviceMonth.Year, serviceMonth.Month));
 
-        return invoiceDate.Date <= serviceMonthEnd ? invoiceDate.Date : serviceMonthEnd;
+        return RelevantDateForPeriodEnd(invoiceDate, serviceMonthEnd);
     }
+
+    public static DateTime RelevantDateForPeriodEnd(DateTime invoiceDate, DateTime servicePeriodEnd) =>
+        invoiceDate.Date <= servicePeriodEnd.Date ? invoiceDate.Date : servicePeriodEnd.Date;
 
     /// <summary>The relevant date for an invoice, derived from its own date and service month.</summary>
     public static DateTime RelevantDate(Invoice invoice) =>
-        RelevantDate(invoice.InvoiceDate, invoice.ServiceMonth);
+        RelevantDateForPeriodEnd(invoice.InvoiceDate, invoice.ResolveServicePeriod().End);
 }

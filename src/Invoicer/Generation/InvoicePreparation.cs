@@ -2,10 +2,10 @@ using Invoicer.Models;
 
 namespace Invoicer.Generation;
 
-/// <summary>Immutable validated tax inputs for one synchronous generation request.</summary>
+/// <summary>Immutable validated tax inputs and service dates for one synchronous generation request.</summary>
 internal sealed record PreparedInvoiceTax(
     InvoiceTaxTreatment Treatment, InvoiceAmounts Amounts,
-    string SellerNip, string SellerVat, BuyerIdentification Buyer);
+    string SellerNip, string SellerVat, BuyerIdentification Buyer, ServicePeriod ServicePeriod);
 
 internal static class InvoicePreparation
 {
@@ -15,6 +15,10 @@ internal static class InvoicePreparation
     public static PreparedInvoiceTax Prepare(Invoice invoice)
     {
         var errors = new List<string>();
+        ServicePeriod? period = null;
+        if (invoice.InvoiceDate.Date == default) errors.Add("Invoice date is required.");
+        try { period = invoice.ResolveServicePeriod(); }
+        catch (InvoiceValidationException ex) { errors.AddRange(ex.Errors); }
         var (treatment, taxError) = InvoiceTaxTreatment.Resolve(
             invoice.Client.Country, invoice.Client.VatRate, invoice.Client.ReverseCharge);
         if (taxError is not null) errors.Add($"Client '{invoice.Client.Key}': {taxError}");
@@ -34,6 +38,6 @@ internal static class InvoicePreparation
         if (treatment?.Kind == InvoiceTaxKind.EuServices && sellerVat != "PL" + sellerNip)
             errors.Add("Supplier EU VAT identifier is required and must be PL followed by the same supplier NIP.");
         if (errors.Count > 0) throw new InvoiceValidationException(errors);
-        return new(treatment!, amounts!, sellerNip, sellerVat, buyer!);
+        return new(treatment!, amounts!, sellerNip, sellerVat, buyer!, period!);
     }
 }

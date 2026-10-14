@@ -8,6 +8,14 @@ namespace Invoicer.Generation;
 /// </summary>
 internal static class InvoiceText
 {
+    public static string ServicePeriodText(ServicePeriod period) => period.IsFullMonth
+        ? period.Start.ToString("MMMM yyyy")
+        : ServicePeriodDates(period);
+
+    public static string ServicePeriodDates(ServicePeriod period) =>
+        period.Start.ToString("dd.MM.yyyy", System.Globalization.CultureInfo.InvariantCulture) + " - " +
+        period.End.ToString("dd.MM.yyyy", System.Globalization.CultureInfo.InvariantCulture);
+
     public const string NpLabel = "NP - not subject to Polish VAT";
     public const string NpExplanationUa = "Не підлягає оподаткуванню ПДВ у Польщі";
     public const string ReverseChargeAnnotation = "Reverse charge / odwrotne obciążenie";

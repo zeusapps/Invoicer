@@ -10,6 +10,11 @@ public class Invoice
     public string FormattedNumber { get; set; } = "";
     public DateTime InvoiceDate { get; set; }
     public DateTime ServiceMonth { get; set; }
+    public DateTime? ServicePeriodStart { get; set; }
+    public DateTime? ServicePeriodEnd { get; set; }
+
+    public ServicePeriod ResolveServicePeriod() =>
+        ServicePeriod.Resolve(ServiceMonth, ServicePeriodStart, ServicePeriodEnd);
 
     public decimal NetAmount { get; set; }
     public int VatRate { get; set; }
@@ -55,7 +60,9 @@ public class Invoice
         bool generateXml = false,
         decimal? exchangeRate = null,
         DateTime? exchangeRateDate = null,
-        string? exchangeRateTable = null)
+        string? exchangeRateTable = null,
+        DateTime? servicePeriodStart = null,
+        DateTime? servicePeriodEnd = null)
     {
         var serviceMonth = CalculateServiceMonth(invoiceDate, client.MonthOffsetRule);
         var netAmount = amount;
@@ -77,6 +84,8 @@ public class Invoice
             FormattedNumber = formattedNumber,
             InvoiceDate = invoiceDate,
             ServiceMonth = serviceMonth,
+            ServicePeriodStart = servicePeriodStart,
+            ServicePeriodEnd = servicePeriodEnd,
             NetAmount = netAmount,
             VatRate = vatRate,
             VatAmount = vatAmount,
@@ -97,16 +106,21 @@ public class Invoice
 
     public static DateTime CalculateServiceMonth(DateTime invoiceDate, string rule)
     {
-        return rule switch
+        if (invoiceDate.Date == default)
+            throw new InvoiceValidationException(["Invoice date is required."]);
+        try
         {
-            "early_previous" => invoiceDate.Day <= 20
-                ? invoiceDate.AddMonths(-1)
-                : invoiceDate,
-            "early_current" => invoiceDate.Day <= 20
-                ? invoiceDate
-                : invoiceDate.AddMonths(1),
-            _ => invoiceDate,
-        };
+            return rule switch
+            {
+                "early_previous" => invoiceDate.Day <= 20 ? invoiceDate.AddMonths(-1) : invoiceDate,
+                "early_current" => invoiceDate.Day <= 20 ? invoiceDate : invoiceDate.AddMonths(1),
+                _ => invoiceDate,
+            };
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            throw new InvoiceValidationException(["Invoice date and month rule produce a service month outside the calendar range."]);
+        }
     }
 
     private static string FormatInvoiceNumber(string prefix, int number, DateTime date)

@@ -20,13 +20,13 @@ public static class KsefXmlGenerator
 
     public static void Generate(Invoice invoice, TimeProvider? timeProvider = null)
     {
-        var errors = Validate(invoice);
+        var errors = Validate(invoice, out var prepared);
         if (errors.Count > 0)
         {
             throw new KsefValidationException(errors);
         }
 
-        GeneratePrepared(invoice, InvoicePreparation.Prepare(invoice), timeProvider);
+        GeneratePrepared(invoice, prepared!, timeProvider);
     }
 
     internal static void GeneratePrepared(Invoice invoice, PreparedInvoiceTax prepared, TimeProvider? timeProvider = null)
@@ -56,8 +56,12 @@ public static class KsefXmlGenerator
         writer.WriteEndDocument();
     }
 
-    internal static List<string> Validate(Invoice invoice)
+    internal static List<string> Validate(Invoice invoice, PreparedInvoiceTax? supplied = null) =>
+        Validate(invoice, out _, supplied);
+
+    private static List<string> Validate(Invoice invoice, out PreparedInvoiceTax? prepared, PreparedInvoiceTax? supplied = null)
     {
+        prepared = supplied;
         var errors = new List<string>();
 
         if (string.IsNullOrWhiteSpace(invoice.FormattedNumber))
@@ -87,7 +91,14 @@ public static class KsefXmlGenerator
 
         try
         {
-            InvoicePreparation.Prepare(invoice);
+            prepared ??= InvoicePreparation.Prepare(invoice);
+            var period = prepared.ServicePeriod;
+            var minimum = new DateTime(2006, 1, 1);
+            var maximum = new DateTime(2050, 1, 1);
+            if (period.Start < minimum || period.Start > maximum)
+                errors.Add("Service period From date must be within the FA(3) range 2006-01-01 through 2050-01-01.");
+            if (period.End < minimum || period.End > maximum)
+                errors.Add("Service period To date must be within the FA(3) range 2006-01-01 through 2050-01-01.");
         }
         catch (InvoiceValidationException ex) { errors.AddRange(ex.Errors); }
 
@@ -218,6 +229,10 @@ public static class KsefXmlGenerator
         writer.WriteElementString("KodWaluty", body.CurrencyCode);
         writer.WriteElementString("P_1", body.InvoiceDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
         writer.WriteElementString("P_2", body.InvoiceNumber);
+        writer.WriteStartElement("OkresFa");
+        writer.WriteElementString("P_6_Od", body.ServicePeriod.Start.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        writer.WriteElementString("P_6_Do", body.ServicePeriod.End.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        writer.WriteEndElement();
 
         // One summary pair per invoice, chosen by the rate coding: P_13_1..3 carry a Polish tax
         // amount in P_14_n; P_13_8/P_13_9 (np I / np II) have no tax amount at all.
@@ -311,6 +326,7 @@ public static class KsefXmlGenerator
                     ExchangeRate: ExchangeRateRules.RequiresRate(invoice.Currency) ? invoice.ExchangeRate : null,
                     InvoiceDate: invoice.InvoiceDate,
                     InvoiceNumber: invoice.FormattedNumber,
+                    ServicePeriod: prepared.ServicePeriod,
                     NetAmount: prepared.Amounts.Net,
                     VatAmount: prepared.Amounts.Vat,
                     GrossAmount: prepared.Amounts.Gross,
@@ -359,6 +375,7 @@ public static class KsefXmlGenerator
         decimal? ExchangeRate,
         DateTime InvoiceDate,
         string InvoiceNumber,
+        ServicePeriod ServicePeriod,
         decimal NetAmount,
         decimal VatAmount,
         decimal GrossAmount,

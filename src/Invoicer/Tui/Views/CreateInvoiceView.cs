@@ -17,7 +17,18 @@ public class CreateInvoiceView : View
     private readonly TextField _invoiceNumberField;
     private readonly TextField _dateField;
     private readonly TextField _amountField;
-    private readonly Label _serviceMonthLabel;
+    private readonly RadioGroup _periodModeRadio;
+    private readonly ServicePeriodDateField _periodStartField;
+    private readonly ServicePeriodDateField _periodEndField;
+    private readonly Button _periodStartPickButton;
+    private readonly Button _periodEndPickButton;
+    private bool _updatingPeriod;
+    private bool _settingRateDate;
+    private bool _rateDateManual;
+    private (string Currency, DateTime Date)? _rateKey;
+    private readonly Func<string, DateTime, CancellationToken, Task<NbpRateResult>> _getRate;
+    private readonly Action<Action> _dispatch;
+    private bool _disposed;
     private readonly Label _rateDateLabel;
     private readonly TextField _rateDateField;
     private readonly Label _rateLabel;
@@ -51,8 +62,16 @@ public class CreateInvoiceView : View
     private bool NeedsRate => ExchangeRateRules.RequiresRate(SelectedClient?.Currency);
 
     public CreateInvoiceView(AppConfig config)
+        : this(config, (currency, date, token) => NbpRateProvider.GetRateAsync(currency, date, token), Application.Invoke)
+    {
+    }
+
+    internal CreateInvoiceView(AppConfig config,
+        Func<string, DateTime, CancellationToken, Task<NbpRateResult>> getRate, Action<Action> dispatch)
     {
         _config = config;
+        _getRate = getRate;
+        _dispatch = dispatch;
 
         X = 0;
         Y = 0;
@@ -132,15 +151,19 @@ public class CreateInvoiceView : View
             _amountField.Text = _enabledClients[0].DefaultAmount.ToString("F2", CultureInfo.InvariantCulture);
         row += 2;
 
-        // Service month (read-only)
-        var serviceMonthTitle = new Label { Text = "Service Month:", X = 1, Y = row };
-        _serviceMonthLabel = new Label
+        var periodTitle = new Label { Text = "Service Period:", X = 1, Y = row };
+        _periodModeRadio = new RadioGroup
         {
-            X = 18,
-            Y = row,
-            Width = Dim.Fill(2),
-            Text = CalculateServiceMonthText(),
+            X = 18, Y = row, RadioLabels = ["Automatic", "Custom"], SelectedItem = 0,
         };
+        row += 2;
+        var periodStartTitle = new Label { Text = "From:", X = 1, Y = row };
+        _periodStartField = new ServicePeriodDateField(DateTime.Today) { X = 18, Y = row };
+        _periodStartPickButton = new Button { Text = "Pick", X = 31, Y = row, NoPadding = true, ShadowStyle = ShadowStyle.None };
+        row++;
+        var periodEndTitle = new Label { Text = "To:", X = 1, Y = row };
+        _periodEndField = new ServicePeriodDateField(DateTime.Today) { X = 18, Y = row };
+        _periodEndPickButton = new Button { Text = "Pick", X = 31, Y = row, NoPadding = true, ShadowStyle = ShadowStyle.None };
         row += 2;
 
         // Exchange rate block. Shown only for a foreign-currency client; when hidden, the rows
@@ -232,7 +255,8 @@ public class CreateInvoiceView : View
             numberLabel, _invoiceNumberField,
             dateLabel, _dateField,
             amountLabel, _amountField,
-            serviceMonthTitle, _serviceMonthLabel,
+            periodTitle, _periodModeRadio, periodStartTitle, _periodStartField, _periodStartPickButton,
+            periodEndTitle, _periodEndField, _periodEndPickButton,
             _rateDateLabel, _rateDateField,
             _rateLabel, _rateField, _refreshRateButton,
             _rateStatusLabel,
@@ -261,31 +285,122 @@ public class CreateInvoiceView : View
         _clientRadio.SelectedItemChanged += (_, _) => OnClientChanged();
         _invoiceNumberField.HasFocusChanged += (_, e) => { if (!e.NewValue) UpdatePreview(); };
         _amountField.HasFocusChanged += (_, e) => { if (!e.NewValue) UpdatePreview(); };
-        _dateField.HasFocusChanged += (_, e) =>
+        _dateField.TextChanged += (_, _) => RefreshDates();
+        _periodModeRadio.SelectedItemChanged += (_, _) => RefreshDates();
+        _periodStartField.TextChanged += (_, _) => { if (!_updatingPeriod) RefreshDates(); };
+        _periodEndField.TextChanged += (_, _) => { if (!_updatingPeriod) RefreshDates(); };
+        _periodStartField.InputValidityChanged += () => { if (!_updatingPeriod) RefreshDates(); };
+        _periodEndField.InputValidityChanged += () => { if (!_updatingPeriod) RefreshDates(); };
+        _periodStartField.HasFocusChanged += (_, e) => { if (!e.NewValue) RefreshDates(); };
+        _periodEndField.HasFocusChanged += (_, e) => { if (!e.NewValue) RefreshDates(); };
+        _periodStartPickButton.Accepting += (_, e) => { e.Cancel = true; PickPeriodDate(true); };
+        _periodEndPickButton.Accepting += (_, e) => { e.Cancel = true; PickPeriodDate(false); };
+        _rateDateField.TextChanged += (_, _) =>
         {
-            if (e.NewValue)
-                return;
-
-            _serviceMonthLabel.Text = CalculateServiceMonthText();
-            // The rate date derives from the invoice date, so it follows it until edited.
-            ResetRateDateToDefault();
-            UpdatePreview();
+            if (_settingRateDate) return;
+            _rateDateManual = true;
+            if (TryGetDates(out var date, out var period, out _) && TryParseField(_rateDateField, out var entered))
+                _rateDateManual = entered != ExchangeRateRules.RelevantDateForPeriodEnd(date, period!.End);
+            RefreshDates();
         };
-        _rateDateField.HasFocusChanged += (_, e) => { if (!e.NewValue) StartRateLookup(); };
         _rateField.HasFocusChanged += (_, e) => { if (!e.NewValue) UpdatePreview(); };
 
         ApplyRateVisibility();
-        ResetRateDateToDefault();
+        RefreshDates();
+    }
+
+    private static bool TryParseField(TextField field, out DateTime date) =>
+        DateTime.TryParseExact(field.Text?.ToString().Trim(), "dd.MM.yyyy", CultureInfo.InvariantCulture,
+            DateTimeStyles.None, out date) && date.Date != default;
+
+    internal bool TryGetDates(out DateTime date, out ServicePeriod? period, out string? error)
+    {
+        period = null;
+        error = null;
+        if (!TryParseField(_dateField, out date))
+        { error = "Please enter a valid invoice date (dd.MM.yyyy)."; return false; }
+        if (SelectedClient is null) { error = "Select a client."; return false; }
+        try
+        {
+            if (_periodModeRadio.SelectedItem == 1)
+            {
+                if (_periodStartField.InputError is { } fromError)
+                { error = "Service period From: " + fromError; return false; }
+                if (_periodEndField.InputError is { } toError)
+                { error = "Service period To: " + toError; return false; }
+                if (!TryParseField(_periodStartField, out var start) || !TryParseField(_periodEndField, out var end))
+                { error = "Service period requires valid From and To dates (dd.MM.yyyy)."; return false; }
+                period = ServicePeriod.Resolve(default, start, end);
+            }
+            else period = ServicePeriod.Resolve(Invoice.CalculateServiceMonth(date, SelectedClient.MonthOffsetRule));
+            return true;
+        }
+        catch (InvoiceValidationException ex) { error = ex.Message; return false; }
+    }
+
+    private void RefreshDates()
+    {
+        if (_updatingPeriod || _disposed) return;
+        var custom = _periodModeRadio.SelectedItem == 1;
+        _periodStartField.Enabled = _periodEndField.Enabled = custom;
+        _periodStartPickButton.Enabled = _periodEndPickButton.Enabled = custom;
+        if (!TryGetDates(out var date, out var period, out _))
+        {
+            ClearRate();
+            UpdatePreview();
+            return;
+        }
+        if (!custom)
+        {
+            _updatingPeriod = true;
+            try { _periodStartField.Date = period!.Start; _periodEndField.Date = period.End; }
+            finally { _updatingPeriod = false; }
+        }
+        if (NeedsRate)
+        {
+            if (!_rateDateManual)
+            {
+                _settingRateDate = true;
+                try { _rateDateField.Text = ExchangeRateRules.RelevantDateForPeriodEnd(date, period!.End)
+                    .ToString("dd.MM.yyyy", CultureInfo.InvariantCulture); }
+                finally { _settingRateDate = false; }
+            }
+            if (TryParseField(_rateDateField, out var rateDate))
+            {
+                var key = (ExchangeRateRules.Normalize(SelectedClient!.Currency), rateDate);
+                if (_rateKey != key) StartRateLookup();
+            }
+            else { ClearRate(); _rateStatusLabel.Text = "Please enter a valid rate date (dd.MM.yyyy)."; }
+        }
         UpdatePreview();
     }
 
-    private DateTime ParseDate()
+    private void PickPeriodDate(bool start)
     {
-        var text = _dateField.Text?.ToString() ?? "";
-        if (DateTime.TryParseExact(text, "dd.MM.yyyy", CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.None, out var date))
-            return date;
-        return DateTime.Today;
+        var field = start ? _periodStartField : _periodEndField;
+        if (_periodModeRadio.SelectedItem != 1) return;
+        using var culture = new DateCultureScope();
+        var currentDate = TryParseField(field, out var displayedDate) ? displayedDate : field.Date;
+        using var dialog = new ServiceDateDialog(start ? "Service period From" : "Service period To", currentDate);
+        Application.Run(dialog);
+        ApplyPickedDate(start, dialog.SelectedDate);
+    }
+
+    internal void ApplyPickedDate(bool start, DateTime? date)
+    {
+        if (_periodModeRadio.SelectedItem != 1 || date is null) return;
+        (start ? _periodStartField : _periodEndField).Date = date.Value;
+        RefreshDates();
+    }
+
+    private void ResetDateSelection()
+    {
+        _rateDateManual = false;
+        _updatingPeriod = true;
+        try { _periodModeRadio.SelectedItem = 0; }
+        finally { _updatingPeriod = false; }
+        ClearRate();
+        RefreshDates();
     }
 
     private void OnClientChanged()
@@ -297,14 +412,12 @@ public class CreateInvoiceView : View
             _amountField.Text = client.DefaultAmount.ToString("F2", CultureInfo.InvariantCulture);
         }
 
-        _serviceMonthLabel.Text = CalculateServiceMonthText();
         // A rate belongs to the currency it was resolved for, so it never survives a change of
         // client. Clearing first also makes the lookup below unconditional: two clients can share
         // a rate date while needing entirely different currencies.
         ClearRate();
         ApplyRateVisibility();
-        ResetRateDateToDefault();
-        UpdatePreview();
+        ResetDateSelection();
     }
 
     /// <summary>
@@ -333,6 +446,8 @@ public class CreateInvoiceView : View
     private void ClearRate()
     {
         _rateLookup?.Cancel();
+        _rateLookup = null;
+        _rateKey = null;
         _rateField.Text = "";
         _rateStatusLabel.Text = "";
         _fetchedRate = null;
@@ -341,66 +456,42 @@ public class CreateInvoiceView : View
     }
 
     /// <summary>
-    /// Puts the derived relevant date back in the field and looks the rate up again. The derived
-    /// date is a starting point, not a verdict: the user may overwrite it.
-    /// </summary>
-    private void ResetRateDateToDefault()
-    {
-        if (!NeedsRate)
-            return;
-
-        var invoiceDate = ParseDate();
-        var serviceMonth = Invoice.CalculateServiceMonth(invoiceDate, SelectedClient!.MonthOffsetRule);
-        var relevantDate = ExchangeRateRules.RelevantDate(invoiceDate, serviceMonth);
-        var text = relevantDate.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture);
-
-        var dateChanged = _rateDateField.Text?.ToString() != text;
-        if (dateChanged)
-            _rateDateField.Text = text;
-
-        // Look the rate up again when the date moved, and also when there is simply no rate to
-        // show: switching from a PLN client back to a foreign-currency one clears the rate while
-        // leaving the date alone, and an early return there would strand the field empty.
-        if (dateChanged || _fetchedRate is null)
-            StartRateLookup();
-    }
-
-    private DateTime ParseRateDate()
-    {
-        var text = _rateDateField.Text?.ToString() ?? "";
-        return DateTime.TryParseExact(text, "dd.MM.yyyy", CultureInfo.InvariantCulture,
-            DateTimeStyles.None, out var date)
-            ? date
-            : ParseDate();
-    }
-
-    /// <summary>
     /// Looks the rate up off the UI thread. Terminal.Gui views may only be touched from the UI
     /// thread, so the result is applied through Application.Invoke.
     /// </summary>
     private void StartRateLookup()
     {
-        if (!NeedsRate)
+        if (!NeedsRate || _disposed)
             return;
-
-        _rateLookup?.Cancel();
+        if (!TryGetDates(out _, out _, out _) || !TryParseField(_rateDateField, out var relevantDate))
+        { ClearRate(); UpdatePreview(); return; }
+        ClearRate();
         var lookup = new CancellationTokenSource();
         _rateLookup = lookup;
 
         var currency = SelectedClient!.Currency;
-        var relevantDate = ParseRateDate();
+        _rateKey = (ExchangeRateRules.Normalize(currency), relevantDate);
 
         _rateStatusLabel.Text = $"Looking up NBP rate for {ExchangeRateRules.Normalize(currency)}...";
 
         _ = Task.Run(async () =>
         {
-            var result = await NbpRateProvider.GetRateAsync(currency, relevantDate, lookup.Token);
-
-            Application.Invoke(() =>
+            NbpRateResult result;
+            try { result = await _getRate(currency, relevantDate, lookup.Token); }
+            catch (OperationCanceledException) { return; }
+            if (lookup.IsCancellationRequested || _disposed) return;
+            _dispatch(() =>
             {
                 // A newer lookup, or a switch to a PLN client, supersedes this one.
-                if (lookup.IsCancellationRequested || !ReferenceEquals(_rateLookup, lookup))
+                if (_disposed || lookup.IsCancellationRequested || !ReferenceEquals(_rateLookup, lookup))
                     return;
+                // A value entered while this request was pending belongs to the user.
+                if (!string.IsNullOrWhiteSpace(_rateField.Text))
+                {
+                    _rateStatusLabel.Text = "Rate entered by hand.";
+                    UpdatePreview();
+                    return;
+                }
 
                 ApplyRateResult(result);
             });
@@ -460,6 +551,8 @@ public class CreateInvoiceView : View
         }
 
         var client = _enabledClients[SelectedClientIndex];
+        if (!TryGetDates(out var date, out var period, out var dateError))
+        { _previewLabel.Text = dateError; return; }
         if (!int.TryParse(_invoiceNumberField.Text?.ToString(), out var invNum)) invNum = 1;
         if (!decimal.TryParse(_amountField.Text?.ToString(), CultureInfo.InvariantCulture, out var amount))
             amount = client.DefaultAmount;
@@ -472,8 +565,6 @@ public class CreateInvoiceView : View
             return;
         }
 
-        var date = ParseDate();
-        var serviceMonth = Invoice.CalculateServiceMonth(date, client.MonthOffsetRule);
         var formattedNum = $"{date:yyyy}/{client.InvoicePrefix}/{invNum:D4}";
         var amounts = treatment.Calculate(amount);
         var vatAmount = amounts.Vat;
@@ -515,7 +606,7 @@ public class CreateInvoiceView : View
             $"Client:  {client.Name}\n" +
             $"Account: {accountText}\n" +
             $"Date:    {date:dd.MM.yyyy}\n" +
-            $"Service: {serviceMonth:MMMM yyyy}\n" +
+            $"Service: {InvoiceText.ServicePeriodDates(period!)}\n" +
             $"\n" +
             $"Net:     {amount.ToString("N2", CultureInfo.InvariantCulture)} {client.Currency}\n" +
             $"Tax:     {treatment.Label}\n" +
@@ -526,17 +617,6 @@ public class CreateInvoiceView : View
             $"\n" +
             $"Output:  {outputDir}/\n" +
             $"File:    {filename}";
-    }
-
-    private string CalculateServiceMonthText()
-    {
-        if (SelectedClientIndex < 0 || SelectedClientIndex >= _enabledClients.Count)
-            return "N/A";
-
-        var client = _enabledClients[SelectedClientIndex];
-        var date = ParseDate();
-        var serviceMonth = Invoice.CalculateServiceMonth(date, client.MonthOffsetRule);
-        return serviceMonth.ToString("MMMM yyyy");
     }
 
     private int GetNextInvoiceNumber()
@@ -576,20 +656,26 @@ public class CreateInvoiceView : View
         }
 
         var client = _enabledClients[SelectedClientIndex];
+        RefreshDates();
+        if (!TryGetDates(out var date, out var period, out var dateError))
+        { MessageBox.ErrorQuery("Invalid Dates", dateError!, "OK"); return; }
+        if (NeedsRate && !TryParseField(_rateDateField, out _))
+        { MessageBox.ErrorQuery("Invalid Dates", "Please enter a valid rate date (dd.MM.yyyy).", "OK"); return; }
         var (exchangeRate, exchangeRateDate, exchangeRateTable) = ResolveRateForInvoice();
 
         try
         {
             var (invoice, generatedFiles) = InvoiceGeneration.CreateAndGenerate(
-                _config, client, invoiceNumber, ParseDate(), amount, generateDocx, generatePdf, generateXml,
-                exchangeRate, exchangeRateDate, exchangeRateTable);
+                _config, client, invoiceNumber, date, amount, generateDocx, generatePdf, generateXml,
+                exchangeRate, exchangeRateDate, exchangeRateTable,
+                servicePeriodStart: period!.Start, servicePeriodEnd: period.End);
 
             InvoiceResultDialog.Show(invoice.FormattedNumber, generatedFiles.ToList());
 
             // Update fields for next invoice
             _invoiceNumberField.Text = (invoiceNumber + 1).ToString();
             ApplyRateVisibility();
-            UpdatePreview();
+            ResetDateSelection();
         }
         catch (KsefValidationException ex)
         {
@@ -604,5 +690,11 @@ public class CreateInvoiceView : View
         {
             MessageBox.ErrorQuery("Generation Failed", $"Error: {ex.Message}", "OK");
         }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) { _disposed = true; _rateLookup?.Cancel(); }
+        base.Dispose(disposing);
     }
 }

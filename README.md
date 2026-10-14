@@ -10,7 +10,8 @@ A terminal-based bilingual (English/Ukrainian) invoice generator for freelancers
 - **Bilingual output** — invoices generated in English and Ukrainian side by side
 - **Multi-format output** — generates DOCX, PDF, and KSeF XML with independent selection
 - **Multiple clients** — configure and manage multiple clients with different currencies, VAT rates, and service descriptions
-- **Smart defaults** — auto-increments invoice numbers, calculates service month based on configurable rules, pre-fills amounts
+- **Smart defaults** — auto-increments invoice numbers, derives service-period dates from configurable month rules, pre-fills amounts
+- **Custom service periods** — edit From/To dates or choose them from calendars; the preview, DOCX, PDF and KSeF XML use the same period
 - **TOML config** — human-readable configuration file, editable both in-app and by hand
 - **Self-updating** — checks GitHub for new releases and installs them in place, on your confirmation
 
@@ -69,8 +70,16 @@ On first launch, a default `config.toml` is created next to the executable. Edit
 
 1. Select a client
 2. Verify/adjust the invoice number, date, and amount
-3. Choose output formats (DOCX, PDF, KSeF XML, or any combination)
-4. Click **Generate**
+3. Check the **Service Period**. **Automatic** fills the first and last day of the month selected by the client's existing month rule. Choose **Custom** to edit **From** and **To** (`dd.MM.yyyy`) or use their **Pick** buttons to select dates from calendars; confirm with **OK**, or cancel to keep the previous date.
+4. For a foreign-currency client, check the rate date and exchange rate. The default rate date is the earlier of the invoice date and the service-period end. You can override it; entering the current default date again restores automatic updates.
+5. Choose output formats (DOCX, PDF, KSeF XML, or any combination)
+6. Click **Generate**
+
+For example, an invoice dated **05.01.2027** with `early_previous` covers **01.12.2026 - 31.12.2026**. Its issue date, number and output folder still follow January 2027. Custom periods can cover part of a month, multiple months or one day; From must not be later than To.
+
+Changing the invoice date recalculates an Automatic period and preserves a Custom period. Switching back to Automatic discards the custom dates. Selecting another client or successfully generating an invoice resets the next invoice to Automatic. Custom dates do not change client configuration. A manually overridden rate date survives invoice-date and period edits until you restore its default or start another invoice/client; rates are refreshed whenever their effective date or currency changes.
+
+The preview always shows exact service dates. DOCX/PDF retain month/year text for a complete calendar month and show an explicit date range for other periods. KSeF XML records both dates in `OkresFa/P_6_Od` and `P_6_Do`, separately from the issue date in `P_1`. Invalid dates or a reversed period prevent generation before any selected file, invoice number or saved output preference is changed.
 
 Files are saved to the configured output directory following the pattern:
 

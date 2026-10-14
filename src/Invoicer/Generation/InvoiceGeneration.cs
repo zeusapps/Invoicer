@@ -14,7 +14,7 @@ public static class InvoiceGeneration
             throw new InvoiceValidationException([$"Billing account '{invoice.BillingAccount.Key}' IBAN is required."]);
         if (invoice.GenerateXml)
         {
-            var errors = KsefXmlGenerator.Validate(invoice);
+            var errors = KsefXmlGenerator.Validate(invoice, prepared);
             if (errors.Count > 0) throw new KsefValidationException(errors);
         }
         var paths = new List<string>();
@@ -28,10 +28,10 @@ public static class InvoiceGeneration
     public static (Invoice Invoice, IReadOnlyList<string> Paths) CreateAndGenerate(
         AppConfig config, ClientConfig client, int number, DateTime date, decimal amount,
         bool docx, bool pdf, bool xml, decimal? rate = null, DateTime? rateDate = null, string? rateTable = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null, DateTime? servicePeriodStart = null, DateTime? servicePeriodEnd = null)
     {
         var invoice = Invoice.Create(client, config.Supplier, config.ResolveBillingAccount(client), config.Output,
-            number, date, amount, docx, pdf, xml, rate, rateDate, rateTable);
+            number, date, amount, docx, pdf, xml, rate, rateDate, rateTable, servicePeriodStart, servicePeriodEnd);
         var paths = Generate(invoice, clock);
         client.LastInvoiceNumber = number;
         config.Output.GenerateDocxByDefault = docx;
